@@ -1,6 +1,6 @@
 import type { CoreConfig } from "./core/ports";
+import type { SandboxTracing } from "./core/tracing";
 import { computeConfigHash } from "./core/utils";
-import type { SandboxTracing } from "./tracing/phoenix";
 
 export type IntentConfig = {
   apiKey: string;

@@ -77,7 +77,6 @@ for await (const chunk of Bun.stdin.stream()) {
       authorName: "you",
       text: line.replace(/@umbrella\b/gi, "").trim(),
       botMentioned,
-      isReplyToBot: false,
     };
     await umbrella.onMessage(message);
     chat.accept(message);

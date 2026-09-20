@@ -4,9 +4,9 @@ import {
   buildIntentState,
   classifyMessage,
   parseIntentClassification,
-  resolveIntentAction,
-  type IntentContext,
 } from "../src/intent/classifier";
+import { resolveIntentAction } from "../src/core/routing";
+import type { IntentContext } from "../src/core/ports";
 
 function context(overrides: Partial<IntentContext> = {}): IntentContext {
   return {

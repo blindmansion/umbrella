@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createChannelName, slugify } from "../src/tasks/naming";
+import { createChannelName, slugify } from "../src/core/naming";
 
 describe("createChannelName", () => {
   test("uses the kind and issue number when a reference exists", () => {

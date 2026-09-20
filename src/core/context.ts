@@ -1,5 +1,8 @@
-import type { TaskKind } from "../store";
-import type { GitHubMetadata, GitHubReference } from "./github";
+import type {
+  GitHubMetadata,
+  GitHubReference,
+  TaskKind,
+} from "./ports";
 
 const MAX_CONTEXT_LENGTH = 4_000;
 
@@ -51,7 +54,6 @@ export function buildRepoContext(options: {
   return lines.join("\n");
 }
 
-/** Prepend the task context to the first prompt sent to a session. */
 export function buildFirstPrompt(
   context: string | null | undefined,
   prompt: string,

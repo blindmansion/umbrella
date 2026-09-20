@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildIssueUrl,
-  fetchOpenIssues,
   findGitHubReference,
   parseGitHubUrl,
   parseRepoFullName,
   rankIssues,
-  type GitHubIssue,
-} from "../src/tasks/github";
+} from "../src/core/github";
+import { fetchOpenIssues } from "../src/adapters/github/client";
+import type { GitHubIssue } from "../src/core/ports";
 
 describe("findGitHubReference", () => {
   test("extracts an issue reference from surrounding text", () => {

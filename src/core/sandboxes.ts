@@ -5,6 +5,7 @@ import type {
   SandboxProvider,
   TaskRecord,
 } from "./ports";
+import { configureSandboxTracing } from "./tracing";
 import { sanitizeError, sanitizeText, shellQuote } from "./utils";
 
 type ModelCacheEntry = { models: string[]; fetchedAt: number };
@@ -231,52 +232,17 @@ export class SandboxManager {
     }
 
     if (this.config.tracing) {
-      await this.configureTracing(sandbox, task, guildName).catch((error) => {
-        console.warn(
-          `Could not configure OpenCode tracing (continuing): ${sanitizeError(error, [token ?? ""])}`,
-        );
-      });
+      await configureSandboxTracing({
+        sandbox,
+        task,
+        tracing: this.config.tracing,
+        guildName,
+      }).catch((error) => {
+          console.warn(
+            `Could not configure OpenCode tracing (continuing): ${sanitizeError(error, [token ?? ""])}`,
+          );
+        });
     }
-  }
-
-  private async configureTracing(
-    sandbox: SandboxHandle,
-    task: TaskRecord,
-    guildName?: string,
-  ): Promise<void> {
-    const tracing = this.config.tracing!;
-    const projectName =
-      task.refNumber === null
-        ? projectSlug(guildName ?? "") || projectSlug(task.repo)
-        : projectSlug(task.repo);
-    const env: Record<string, string> = {
-      ARIZE_NONINTERACTIVE: "1",
-      ARIZE_BACKEND: "phoenix",
-      PHOENIX_ENDPOINT: tracing.endpoint,
-      ARIZE_LOG_PROMPTS: String(tracing.logContent),
-      ARIZE_LOG_TOOL_DETAILS: String(tracing.logContent),
-      ARIZE_LOG_TOOL_CONTENT: String(tracing.logContent),
-      UMBRELLA_PHOENIX_PROJECT: projectName || `umbrella-${task.channelId}`,
-    };
-    if (tracing.apiKey) env.PHOENIX_API_KEY = tracing.apiKey;
-    const installer =
-      "https://raw.githubusercontent.com/Arize-ai/coding-harness-tracing/main/install.sh";
-    await this.runRequired(
-      sandbox,
-      [
-        "set -eu",
-        "if ! command -v python3 >/dev/null 2>&1; then echo 'python3 is required for OpenCode tracing' >&2; exit 1; fi",
-        "if ! python3 -m venv --help >/dev/null 2>&1; then (apt-get update && apt-get install -y python3-venv) >/dev/null 2>&1 || true; fi",
-        'ARIZE_ENV_FILE="$(mktemp)"; export ARIZE_ENV_FILE',
-        `printf "ARIZE_PROJECT_NAME='%s'\\n" "$UMBRELLA_PHOENIX_PROJECT" > "$ARIZE_ENV_FILE"`,
-        `curl -fsSL ${installer} | bash -s -- opencode --non-interactive`,
-        'rm -f "$ARIZE_ENV_FILE"',
-      ].join("\n"),
-      "configure OpenCode tracing",
-      600,
-      undefined,
-      env,
-    );
   }
 
   private async runRequired(
@@ -313,11 +279,4 @@ export class SandboxManager {
       );
     }
   }
-}
-
-function projectSlug(value: string): string {
-  return value
-    .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}_-]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
 }

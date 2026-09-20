@@ -4,11 +4,10 @@ import type {
   Deps,
   IncomingMessage,
 } from "./ports";
+import { findGitHubReference, parseRepoFullName } from "./github";
 import { runThreadPrompt } from "./prompts";
 import {
   closeTask,
-  findGitHubReference,
-  parseRepoFullName,
   provisionFromCommand,
   updateStatusMessage,
 } from "./provision";
@@ -20,6 +19,7 @@ import {
   latestTurn,
 } from "./routing";
 import { SandboxManager } from "./sandboxes";
+import { sanitizeError } from "./utils";
 
 export function createUmbrella(deps: Deps) {
   const manager = new SandboxManager(deps.sandboxes, deps.config);
@@ -154,29 +154,37 @@ export function createUmbrella(deps: Deps) {
               : `Task ready: <#${result.channelId}>`,
           );
           if (!result.provisioningError) {
-            const synthetic = { ...msg, channelId: result.channelId };
-            const threadId = await deps.chat.startThread(
-              synthetic,
-              createThreadName(msg.text),
-            );
-            await deps.store.createSession({
-              threadId,
-              channelId: result.channelId,
-              openCodeSessionId: null,
-              model: null,
-              createdBy: msg.authorId,
-              createdAt: (deps.clock ?? Date.now)(),
-            });
-            const withSession = await deps.store.getTask(result.channelId);
-            if (withSession) await updateStatusMessage(deps, withSession);
-            await runPrompt({
-              msg: synthetic,
-              threadId,
-              channelId: result.channelId,
-              prompt: msg.text,
-              createdBy: msg.authorId,
-              includeContext: false,
-            });
+            try {
+              const synthetic = { ...msg, channelId: result.channelId };
+              const threadId = await deps.chat.startThread(
+                synthetic,
+                createThreadName(msg.text),
+              );
+              await deps.store.createSession({
+                threadId,
+                channelId: result.channelId,
+                openCodeSessionId: null,
+                model: null,
+                createdBy: msg.authorId,
+                createdAt: (deps.clock ?? Date.now)(),
+              });
+              const withSession = await deps.store.getTask(result.channelId);
+              if (withSession) await updateStatusMessage(deps, withSession);
+              await runPrompt({
+                msg: synthetic,
+                threadId,
+                channelId: result.channelId,
+                prompt: msg.text,
+                createdBy: msg.authorId,
+                includeContext: false,
+              });
+            } catch (error) {
+              console.error("Could not start task session:", error);
+              await deps.chat.send(
+                result.channelId,
+                "I couldn't start your session. Mention me in the task channel to try again.",
+              );
+            }
           }
           return;
         }
@@ -326,8 +334,8 @@ export function createUmbrella(deps: Deps) {
           return {
             ok: true,
             message: session.model
-              ? `This session uses \`${session.model}\`.`
-              : "This session uses the server default.",
+              ? `This session uses \`${session.model}\`. Pass a \`model\` option to choose one.`
+              : "This session uses the server default. Pass a `model` option to choose one.",
           };
         }
         await deps.store.updateSessionModel(command.threadId, model);
@@ -345,8 +353,8 @@ export function createUmbrella(deps: Deps) {
         return {
           ok: true,
           message: task.model
-            ? `This task uses \`${task.model}\`. New threads inherit it.`
-            : "This task uses the server default.",
+            ? `This task uses \`${task.model}\`. New threads inherit it. Pass a \`model\` option to choose one for new threads.`
+            : "This task uses the server default. Pass a `model` option to choose one for new threads.",
         };
       }
       const updated = await deps.store.updateTask(task.channelId, { model });
@@ -357,9 +365,16 @@ export function createUmbrella(deps: Deps) {
         message: `New sessions in this task will use \`${model}\`.`,
       };
     } catch (error) {
+      const message = sanitizeError(error, [
+        deps.config.githubToken ?? "",
+        ...Object.values(deps.config.sandboxEnv),
+      ]);
       return {
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message:
+          command.type === "task"
+            ? `Could not create the task: ${message}`
+            : message,
       };
     }
   }

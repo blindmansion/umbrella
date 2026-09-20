@@ -11,12 +11,12 @@ import type {
   StateStore,
   TaskKind,
 } from "../../core/ports";
-import { parseRepoFullName } from "../../core/provision";
 import {
   buildIssueUrl,
+  parseRepoFullName,
   parseGitHubUrl,
   rankIssues,
-} from "../../tasks/github";
+} from "../../core/github";
 import { truncate } from "../../core/utils";
 
 type Runtime = {
@@ -29,10 +29,17 @@ const definitions = [
     .setName("task")
     .setDescription("Create a task channel and Railway sandbox")
     .addStringOption((option) =>
-      option.setName("url").setDescription("GitHub issue or pull request URL").setAutocomplete(true),
+      option
+        .setName("url")
+        .setDescription("GitHub issue or pull request URL")
+        .setMaxLength(300)
+        .setAutocomplete(true),
     )
     .addStringOption((option) =>
-      option.setName("repo").setDescription("Repository in owner/name form"),
+      option
+        .setName("repo")
+        .setDescription("Repository in owner/name form")
+        .setMaxLength(200),
     )
     .addStringOption((option) =>
       option
@@ -46,7 +53,10 @@ const definitions = [
         ),
     )
     .addStringOption((option) =>
-      option.setName("branch").setDescription("Explicit git branch"),
+      option
+        .setName("branch")
+        .setDescription("Explicit git branch")
+        .setMaxLength(255),
     ),
   new SlashCommandBuilder()
     .setName("close")
@@ -55,7 +65,11 @@ const definitions = [
     .setName("model")
     .setDescription("Show or set the OpenCode model")
     .addStringOption((option) =>
-      option.setName("model").setDescription("OpenCode model").setAutocomplete(true),
+      option
+        .setName("model")
+        .setDescription("OpenCode model")
+        .setMaxLength(200)
+        .setAutocomplete(true),
     ),
   new SlashCommandBuilder()
     .setName("repo")
@@ -67,7 +81,11 @@ const definitions = [
         .setName("set")
         .setDescription("Set the repository")
         .addStringOption((option) =>
-          option.setName("repo").setDescription("owner/name").setRequired(true),
+          option
+            .setName("repo")
+            .setDescription("owner/name")
+            .setMaxLength(200)
+            .setRequired(true),
         ),
     )
     .addSubcommand((sub) =>
@@ -141,7 +159,7 @@ export async function handleCommand(
       repo: action === "set" ? interaction.options.getString("repo", true) : undefined,
     };
   }
-  await interaction.deferReply();
+  await interaction.deferReply({ ephemeral: command.type !== "task" });
   const result = await runtime.onCommand(command);
   await interaction.editReply(result.message);
 }

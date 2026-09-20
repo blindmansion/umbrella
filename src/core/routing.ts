@@ -18,27 +18,42 @@ export async function classifyAction(
     latest: latestTurn(msg),
   });
   const threshold = deps.config.intentConfidenceThreshold ?? 0.6;
-  let action: IntentAction | undefined;
-  if (!classification) {
-    action = msg.botMentioned ? "chat" : undefined;
-  } else if (msg.botMentioned) {
-    action =
-      classification.action === "ignore" ? "chat" : classification.action;
-  } else if (
-    classification.directedAtBot >= threshold &&
-    classification.action !== "ignore" &&
-    classification.confidence >=
-      (classification.action === "reset" ||
-      classification.action === "close"
-        ? Math.min(1, threshold + 0.15)
-        : threshold)
-  ) {
-    action = classification.action;
-  }
+  const action = resolveIntentAction({
+    classification,
+    botMentioned: msg.botMentioned,
+    threshold,
+  });
   console.log(
     `Intent for message ${msg.id}: surface=${context.surface} mentioned=${msg.botMentioned} turns=${context.recentTurns.length} directed=${classification?.directedAtBot.toFixed(2) ?? "n/a"} action=${classification?.action ?? "n/a"} confidence=${classification?.confidence.toFixed(2) ?? "n/a"} -> ${action ?? "silent"}`,
   );
   return action;
+}
+
+export function resolveIntentAction(options: {
+  classification:
+    | {
+        directedAtBot: number;
+        action: IntentAction;
+        confidence: number;
+      }
+    | undefined;
+  botMentioned: boolean;
+  threshold: number;
+}): IntentAction | undefined {
+  const { classification, botMentioned, threshold } = options;
+  if (!classification) return botMentioned ? "chat" : undefined;
+  if (botMentioned) {
+    return classification.action === "ignore" ? "chat" : classification.action;
+  }
+  if (classification.directedAtBot < threshold) return undefined;
+  if (classification.action === "ignore") return undefined;
+  const actionThreshold =
+    classification.action === "reset" || classification.action === "close"
+      ? Math.min(1, threshold + 0.15)
+      : threshold;
+  return classification.confidence >= actionThreshold
+    ? classification.action
+    : undefined;
 }
 
 export function latestTurn(msg: IncomingMessage): ConversationTurn {

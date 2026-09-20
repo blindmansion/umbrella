@@ -14,6 +14,7 @@ await startBot({
   token: config.token,
   store,
   github,
+  config,
   createRuntime: (chat) =>
     createUmbrella({
       store,

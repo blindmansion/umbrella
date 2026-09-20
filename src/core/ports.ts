@@ -126,7 +126,6 @@ export type IncomingMessage = {
   authorName: string;
   text: string;
   botMentioned: boolean;
-  isReplyToBot: boolean;
 };
 
 export type MessageRef = {

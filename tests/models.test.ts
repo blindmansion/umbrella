@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecHandle, SandboxHandle } from "../src/core/ports";
+import { parseModelList } from "../src/core/opencode";
 import { SandboxManager } from "../src/core/sandboxes";
-import { clearModelCache, getAvailableModels } from "../src/opencode/models";
-import { parseModelList } from "../src/opencode/runner";
 
 function fakeSandbox(outputs: string[]): {
   sandbox: SandboxHandle;
@@ -68,13 +67,13 @@ describe("parseModelList", () => {
 describe("getAvailableModels", () => {
   test("lists models from the sandbox and caches the result", async () => {
     const models = manager();
-    clearModelCache(models);
+    models.clearModelCache();
     const { sandbox, calls } = fakeSandbox([
       "anthropic/claude-sonnet-4-6\nfireworks-ai/models/glm-5p3\n",
     ]);
 
-    const first = await getAvailableModels(models, "channel-1", sandbox);
-    const second = await getAvailableModels(models, "channel-1", sandbox);
+    const first = await models.availableModels("channel-1", sandbox);
+    const second = await models.availableModels("channel-1", sandbox);
 
     expect(first).toEqual([
       "anthropic/claude-sonnet-4-6",
@@ -86,14 +85,14 @@ describe("getAvailableModels", () => {
 
   test("refresh bypasses the cache", async () => {
     const models = manager();
-    clearModelCache(models);
+    models.clearModelCache();
     const { sandbox, calls } = fakeSandbox([
       "anthropic/claude-sonnet-4-6\n",
       "anthropic/claude-opus-4-6\n",
     ]);
 
-    await getAvailableModels(models, "channel-refresh", sandbox);
-    const refreshed = await getAvailableModels(models, "channel-refresh", sandbox, {
+    await models.availableModels("channel-refresh", sandbox);
+    const refreshed = await models.availableModels("channel-refresh", sandbox, {
       refresh: true,
     });
 

@@ -168,36 +168,6 @@ export function parseIntentClassification(
   };
 }
 
-export function resolveIntentAction(options: {
-  classification: IntentClassification | undefined;
-  botMentioned: boolean;
-  threshold: number;
-}): IntentAction | undefined {
-  const { classification, botMentioned, threshold } = options;
-
-  if (!classification) {
-    return botMentioned ? "chat" : undefined;
-  }
-
-  if (botMentioned) {
-    return classification.action === "ignore" ? "chat" : classification.action;
-  }
-
-  if (classification.directedAtBot < threshold) return undefined;
-  if (classification.action === "ignore") return undefined;
-  if (classification.confidence < actionThreshold(classification.action, threshold)) {
-    return undefined;
-  }
-  return classification.action;
-}
-
-function actionThreshold(action: IntentAction, threshold: number): number {
-  if (action === "reset" || action === "close") {
-    return Math.min(1, threshold + 0.15);
-  }
-  return threshold;
-}
-
 async function requestSystemOne(
   body: {
     state: unknown;

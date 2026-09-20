@@ -64,7 +64,6 @@ const message: IncomingMessage = {
   authorName: "user",
   text: "please fix https://github.com/owner/repo/issues/42",
   botMentioned: true,
-  isReplyToBot: false,
 };
 
 describe("createUmbrella", () => {

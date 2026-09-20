@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { newDb } from "pg-mem";
-import { ChannelQueue } from "../src/sandbox/queue";
+import { ChannelQueue } from "../src/core/queue";
 import {
   createStore,
   type DatabasePool,
-  type SessionRecord,
-  type TaskRecord,
-} from "../src/store";
+} from "../src/adapters/postgres/store";
+import type { SessionRecord, TaskRecord } from "../src/core/ports";
 
 async function createTestStore() {
   const memory = newDb({ autoCreateForeignKeyIndices: true });

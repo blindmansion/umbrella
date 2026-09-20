@@ -9,6 +9,7 @@ import {
 import type {
   Command,
   CommandResult,
+  CoreConfig,
   GitHubClient,
   IncomingMessage,
   StateStore,
@@ -30,6 +31,9 @@ export async function startBot(options: {
   token: string;
   store: StateStore;
   github: GitHubClient;
+  config: CoreConfig & {
+    intent?: { model: string; confidenceThreshold: number };
+  };
   createRuntime(chat: DiscordChatPlatform): Runtime;
 }): Promise<Client> {
   const client = new Client({
@@ -44,6 +48,24 @@ export async function startBot(options: {
 
   client.once(Events.ClientReady, async (ready) => {
     console.log(`Discord bot logged in as ${ready.user.tag}`);
+    if (options.config.tracing) {
+      console.log(
+        `OpenCode tracing enabled: sandboxes will export to ${options.config.tracing.endpoint} (networkIsolation=${options.config.networkIsolation ?? "ISOLATED"}).`,
+      );
+    } else {
+      console.log(
+        "OpenCode tracing disabled. Set PHOENIX_ENDPOINT to a Phoenix URL reachable from Railway sandboxes to enable it.",
+      );
+    }
+    if (options.config.intent) {
+      console.log(
+        `Intent classification enabled via TypeSafe ${options.config.intent.model} (confidence threshold=${options.config.intent.confidenceThreshold}).`,
+      );
+    } else {
+      console.log(
+        "Intent classification disabled. Set TYPESAFE_API_KEY to let the bot infer intent without mentions.",
+      );
+    }
     await Promise.all(
       ready.guilds.cache.map((guild) =>
         registerCommands(guild).catch((error) => {
@@ -132,6 +154,5 @@ function toIncomingMessage(
     authorName: message.author.username,
     text,
     botMentioned,
-    isReplyToBot: message.reference?.messageId !== undefined,
   };
 }

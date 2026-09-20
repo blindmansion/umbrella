@@ -1,6 +1,7 @@
 import { runOpenCode } from "./opencode";
 import { splitOutput } from "./output";
 import type { Deps } from "./ports";
+import { buildFirstPrompt } from "./context";
 import { updateStatusMessage } from "./provision";
 import { ChannelQueue } from "./queue";
 import { SandboxManager } from "./sandboxes";
@@ -139,17 +140,6 @@ export async function runThreadPrompt(options: {
   } finally {
     inFlight.delete(threadId);
   }
-}
-
-export function buildFirstPrompt(
-  context: string | null,
-  prompt: string,
-): string {
-  const prefix = context?.trim();
-  const body = prompt.trim();
-  if (!prefix) return prompt;
-  if (!body) return prefix;
-  return `${prefix}\n\n---\n\n${body}`;
 }
 
 async function sendChunks(

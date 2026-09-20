@@ -1,4 +1,4 @@
-import type { TaskKind } from "../store";
+import type { TaskKind } from "./ports";
 
 export function createChannelName(
   kind: TaskKind,
@@ -11,8 +11,7 @@ export function createChannelName(
     bugfix: "bug",
     review: "pr",
   };
-  const stem =
-    number === null ? "task" : `${prefixes[kind]}-${number}`;
+  const stem = number === null ? "task" : `${prefixes[kind]}-${number}`;
   const maxSlugLength = Math.max(1, 60 - stem.length - 1);
   return `${stem}-${slug.slice(0, maxSlugLength)}`.slice(0, 100);
 }

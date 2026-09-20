@@ -3,8 +3,8 @@ import {
   buildFirstPrompt,
   buildReferenceContext,
   buildRepoContext,
-} from "../src/tasks/context";
-import type { GitHubReference } from "../src/tasks/github";
+} from "../src/core/context";
+import type { GitHubReference } from "../src/core/ports";
 
 const reference: GitHubReference = {
   owner: "blindmansion",

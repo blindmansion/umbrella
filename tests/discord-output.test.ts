@@ -1,25 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import {
-  MAX_DISCORD_OUTPUT_MESSAGES,
-  splitForDiscord,
-} from "../src/discord/output";
+  MAX_OUTPUT_MESSAGES,
+  splitOutput,
+} from "../src/core/output";
 
-describe("splitForDiscord", () => {
+describe("splitOutput", () => {
   test("leaves short messages unchanged", () => {
-    expect(splitForDiscord("hello")).toEqual(["hello"]);
+    expect(splitOutput("hello")).toEqual(["hello"]);
   });
 
   test("caps output and marks it as truncated", () => {
-    const chunks = splitForDiscord("word ".repeat(10_000));
+    const chunks = splitOutput("word ".repeat(10_000));
 
-    expect(chunks).toHaveLength(MAX_DISCORD_OUTPUT_MESSAGES);
+    expect(chunks).toHaveLength(MAX_OUTPUT_MESSAGES);
     expect(chunks.every((chunk) => chunk.length <= 2_000)).toBe(true);
     expect(chunks.at(-1)).toEndWith("[output truncated]");
   });
 
   test("closes and reopens code fences between messages", () => {
     const source = `\`\`\`ts\n${"const value = 1;\n".repeat(20)}\`\`\``;
-    const chunks = splitForDiscord(source, 80);
+    const chunks = splitOutput(source, 80);
 
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 80)).toBe(true);

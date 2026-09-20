@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { buildPendingPrompt } from "../src/intent/backlog";
-import type { ConversationTurn } from "../src/intent/classifier";
+import { buildPendingPrompt } from "../src/core/routing";
+import type { ConversationTurn } from "../src/core/ports";
 
 const human = (content: string, author = "alice"): ConversationTurn => ({
   author,

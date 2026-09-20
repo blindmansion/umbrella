@@ -1,12 +1,12 @@
 import type {
   Command,
   Deps,
-  GitHubMetadata,
-  GitHubReference,
-  RepoReference,
   TaskKind,
   TaskRecord,
 } from "./ports";
+import { buildReferenceContext, buildRepoContext } from "./context";
+import { inferBranch, parseRepoFullName } from "./github";
+import { createChannelName, slugify } from "./naming";
 import { ChannelQueue } from "./queue";
 import { SandboxManager } from "./sandboxes";
 import { sanitizeError } from "./utils";
@@ -49,7 +49,14 @@ export async function provisionFromCommand(
       refNumber: command.reference.number,
       branch,
       slug,
-      context: referenceContext(command.reference, kind, branch, metadata),
+      context: buildReferenceContext({
+        kind,
+        repo: `${command.reference.owner}/${command.reference.name}`,
+        refNumber: command.reference.number,
+        branch,
+        reference: command.reference,
+        metadata,
+      }),
     });
   }
 
@@ -75,7 +82,12 @@ export async function provisionFromCommand(
     refNumber: null,
     branch,
     slug: slugify(command.prompt ?? "") || "task",
-    context: repoContext(repoName, kind, branch, command.prompt),
+    context: buildRepoContext({
+      repo: repoName,
+      kind,
+      branch,
+      request: command.prompt,
+    }),
   });
 }
 
@@ -213,112 +225,4 @@ export async function renderTaskStatus(
     `**Sessions/threads:** ${sessions}`,
     `**Last updated:** <t:${Math.floor((deps.clock ?? Date.now)() / 1_000)}:R>`,
   ].join("\n");
-}
-
-export function parseRepoFullName(value: string): RepoReference | undefined {
-  const match = value.trim().match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
-  return match ? { owner: match[1]!, name: match[2]! } : undefined;
-}
-
-export function findGitHubReference(
-  content: string,
-): GitHubReference | undefined {
-  for (const match of content.match(
-    /https:\/\/github\.com\/[^\s<>()]+?\/(?:issues|pull)\/[1-9]\d*/gi,
-  ) ?? []) {
-    try {
-      const url = new URL(match);
-      const parts = url.pathname.match(
-        /^\/([^/]+)\/([^/]+)\/(issues|pull)\/([1-9]\d*)\/?$/,
-      );
-      if (parts) {
-        return {
-          owner: parts[1]!,
-          name: parts[2]!,
-          urlKind: parts[3] === "pull" ? "pull" : "issue",
-          number: Number(parts[4]),
-        };
-      }
-    } catch {
-      // Ignore malformed URLs.
-    }
-  }
-  return undefined;
-}
-
-function inferBranch(options: {
-  kind: TaskKind;
-  number: number;
-  slug: string;
-  explicitBranch?: string;
-  metadata: GitHubMetadata;
-}): string {
-  if (options.explicitBranch) return options.explicitBranch;
-  if (options.kind === "feature") {
-    return `feat/${options.number}-${options.slug}`;
-  }
-  if (options.kind === "review" && options.metadata.headRef) {
-    return options.metadata.headRef;
-  }
-  return options.metadata.defaultBranch ?? "main";
-}
-
-function referenceContext(
-  ref: GitHubReference,
-  kind: TaskKind,
-  branch: string,
-  metadata: GitHubMetadata,
-): string {
-  const repo = `${ref.owner}/${ref.name}`;
-  const label = ref.urlKind === "pull" ? "Pull request" : "Issue";
-  const body = metadata.body?.trim();
-  return [
-    "Task context (provided automatically; you do not need to ask for it):",
-    `- ${label}: ${repo}#${ref.number}${metadata.title ? ` — ${metadata.title}` : ""}`,
-    `- URL: https://github.com/${repo}/${ref.urlKind === "pull" ? "pull" : "issues"}/${ref.number}`,
-    `- Kind: ${kind}`,
-    `- Branch: ${branch}`,
-    body ? `\n${label} description:\n${truncateContext(body)}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function repoContext(
-  repo: string,
-  kind: TaskKind,
-  branch: string,
-  prompt?: string,
-): string {
-  return [
-    "Task context (provided automatically; you do not need to ask for it):",
-    `- Repository: ${repo}`,
-    `- Kind: ${kind}`,
-    `- Branch: ${branch}`,
-    prompt?.trim() ? `\nOriginal request:\n${truncateContext(prompt.trim())}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function truncateContext(value: string): string {
-  return value.length <= 4_000
-    ? value
-    : `${value.slice(0, 4_000)}\n… (truncated)`;
-}
-
-function slugify(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function createChannelName(
-  kind: TaskKind,
-  refNumber: number | null,
-  slug: string,
-): string {
-  return [kind, refNumber, slug].filter((part) => part !== null).join("-").slice(0, 100);
 }

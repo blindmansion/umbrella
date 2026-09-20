@@ -4,11 +4,11 @@ import type {
   ExecOptions,
   SandboxHandle,
 } from "../src/core/ports";
-import type { TaskRecord } from "../src/store";
+import type { TaskRecord } from "../src/core/ports";
 import {
   configureSandboxTracing,
   phoenixProjectName,
-} from "../src/tracing/phoenix";
+} from "../src/core/tracing";
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
