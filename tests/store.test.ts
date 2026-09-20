@@ -31,6 +31,7 @@ function task(
     configHash: null,
     statusMessageId: null,
     model: null,
+    context: null,
     createdAt: 1_700_000_000_000,
     ...overrides,
   };
@@ -83,6 +84,22 @@ describe("state store", () => {
 
     await store.deleteTask(first.channelId);
     expect(await store.getTask(first.channelId)).toBeUndefined();
+    await store.close();
+  });
+
+  test("stores and updates a task's context", async () => {
+    const store = await createTestStore();
+    const created = task("channel-context", { context: "Issue #1: fix it" });
+
+    await store.createTask(created);
+    expect((await store.getTask(created.channelId))?.context).toBe(
+      "Issue #1: fix it",
+    );
+
+    const updated = await store.updateTask(created.channelId, {
+      context: "Issue #2: try again",
+    });
+    expect(updated?.context).toBe("Issue #2: try again");
     await store.close();
   });
 

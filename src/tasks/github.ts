@@ -14,6 +14,7 @@ export type RepoReference = {
 
 export type GitHubMetadata = {
   title?: string;
+  body?: string;
   headRef?: string;
   defaultBranch?: string;
 };
@@ -98,9 +99,11 @@ export async function fetchGitHubMetadata(
     try {
       const detail = (await detailResult.value.json()) as {
         title?: unknown;
+        body?: unknown;
         head?: { ref?: unknown };
       };
       if (typeof detail.title === "string") metadata.title = detail.title;
+      if (typeof detail.body === "string") metadata.body = detail.body;
       if (typeof detail.head?.ref === "string") metadata.headRef = detail.head.ref;
     } catch {
       // Fall back to URL-derived metadata.

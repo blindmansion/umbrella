@@ -14,6 +14,7 @@ export type TaskRecord = {
   configHash: string | null;
   statusMessageId: string | null;
   model: string | null;
+  context: string | null;
   createdAt: number;
 };
 
@@ -44,6 +45,7 @@ export type TaskUpdate = Partial<
     | "configHash"
     | "statusMessageId"
     | "model"
+    | "context"
   >
 >;
 
@@ -85,6 +87,7 @@ type TaskRow = {
   config_hash: string | null;
   status_message_id: string | null;
   model: string | null;
+  context: string | null;
   created_at: number;
 };
 
@@ -134,6 +137,7 @@ export async function createStore(options: {
       config_hash TEXT NULL,
       status_message_id TEXT NULL,
       model TEXT NULL,
+      context TEXT NULL,
       created_at BIGINT NOT NULL
     );
 
@@ -153,6 +157,7 @@ export async function createStore(options: {
     );
 
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS model TEXT NULL;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context TEXT NULL;
     ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model TEXT NULL;
   `);
 
@@ -165,8 +170,8 @@ export async function createStore(options: {
       await database.query(
         `INSERT INTO tasks (
           channel_id, kind, repo, ref_number, branch, sandbox_id, status,
-          config_hash, status_message_id, model, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          config_hash, status_message_id, model, context, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
         [
           task.channelId,
           task.kind,
@@ -178,6 +183,7 @@ export async function createStore(options: {
           task.configHash,
           task.statusMessageId,
           task.model,
+          task.context,
           task.createdAt,
         ],
       );
@@ -203,6 +209,7 @@ export async function createStore(options: {
         configHash: "config_hash",
         statusMessageId: "status_message_id",
         model: "model",
+        context: "context",
       };
       const entries = Object.entries(update).filter(
         (entry): entry is [keyof TaskUpdate, string | number | null] =>
@@ -430,6 +437,7 @@ function taskFromRow(row: TaskRow): TaskRecord {
     configHash: row.config_hash,
     statusMessageId: row.status_message_id,
     model: row.model,
+    context: row.context,
     createdAt: Number(row.created_at),
   };
 }

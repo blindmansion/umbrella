@@ -44,6 +44,7 @@ import {
   registerTaskCommands,
   updateStatusMessage,
 } from "../tasks/commands";
+import { buildFirstPrompt } from "../tasks/context";
 import { findGitHubReference, type GitHubReference } from "../tasks/github";
 import { splitForDiscord } from "./output";
 
@@ -496,6 +497,7 @@ async function startTaskPrompt(
     channelId: channel.id,
     prompt,
     createdBy,
+    includeContext: false,
   });
 }
 
@@ -606,8 +608,11 @@ async function runThreadPrompt(options: {
   channelId: string;
   prompt: string;
   createdBy: string;
+  /** Set false when the prompt already carries the task context. */
+  includeContext?: boolean;
 }): Promise<void> {
-  const { thread, channelId, prompt, createdBy } = options;
+  const { thread, channelId, prompt, createdBy, includeContext = true } =
+    options;
   if (inFlightThreads.has(thread.id)) {
     await thread.send(
       "I'm still working on the previous prompt in this thread.",
@@ -695,11 +700,17 @@ async function runThreadPrompt(options: {
 
       const storedSessionId = session?.openCodeSessionId ?? undefined;
       const sessionModel = session?.model ?? task.model ?? model;
+      // A fresh session gets the task context so the first prompt in a thread
+      // doesn't have to restate which issue or request it is working on.
+      const sessionPrompt =
+        storedSessionId === undefined && includeContext
+          ? buildFirstPrompt(task.context, prompt)
+          : prompt;
       let step = 0;
       const response = await runOpenCode({
         sandbox,
         model: sessionModel,
-        prompt,
+        prompt: sessionPrompt,
         sessionId: storedSessionId,
         onProgress: async (event) => {
           if (event.type === "step_start") {
