@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { createMemoryStore } from "../src/adapters/local/store";
+import { configureMessage, createConfigureLink } from "../src/core/dashboard";
 import {
   deriveDashboardKeys,
   openSecret,
@@ -92,6 +94,53 @@ describe("magic links", () => {
     expect(
       await verifyMagicLinkToken(magicLink, token, 1_700_000_000),
     ).toBeUndefined();
+  });
+});
+
+describe("configure links", () => {
+  const dashboard = { url: "https://dash.example.com", secret: SECRET };
+  const identity = {
+    guildId: "guild-1",
+    guildName: "Umbrella HQ",
+    userId: "user-1",
+    userName: "alice",
+    isAdmin: true,
+  };
+  const now = 1_700_000_000_000;
+
+  async function tokenFrom(url: string): Promise<string> {
+    return decodeURIComponent(new URL(url).searchParams.get("token")!);
+  }
+
+  test("issues a signed link and stores its single-use nonce", async () => {
+    const store = createMemoryStore(() => now);
+    const url = await createConfigureLink(store, dashboard, identity, () => now);
+    expect(url.startsWith("https://dash.example.com/auth/magic?token=")).toBe(
+      true,
+    );
+
+    const { magicLink } = await deriveDashboardKeys(SECRET);
+    const payload = await verifyMagicLinkToken(
+      magicLink,
+      await tokenFrom(url),
+      Math.floor(now / 1_000),
+    );
+    expect(payload).toMatchObject({
+      g: "guild-1",
+      u: "user-1",
+      a: true,
+      x: Math.floor(now / 1_000) + MAGIC_LINK_TTL_SECONDS,
+    });
+    expect(payload!.j).toBeTruthy();
+
+    expect(await store.consumeMagicLink(payload!.j, now)).toBeDefined();
+    expect(await store.consumeMagicLink(payload!.j, now)).toBeUndefined();
+  });
+
+  test("includes the link in the reply message", () => {
+    expect(configureMessage("https://dash.example.com/auth/magic?token=x")).toContain(
+      "https://dash.example.com/auth/magic?token=x",
+    );
   });
 });
 
