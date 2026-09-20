@@ -33,10 +33,12 @@ import {
 import type { SandboxTracing } from "../tracing/phoenix";
 import {
   fetchGitHubMetadata,
+  fetchOpenIssues,
   fetchRepoDefaultBranch,
   inferBranch,
   parseGitHubUrl,
   parseRepoFullName,
+  rankIssues,
   type GitHubReference,
 } from "./github";
 import { createChannelName, slugify } from "./naming";
@@ -57,6 +59,7 @@ const taskCommand = new SlashCommandBuilder()
     option
       .setName("url")
       .setDescription("GitHub issue or pull request URL")
+      .setAutocomplete(true)
       .setMaxLength(300),
   )
   .addStringOption((option) =>
@@ -155,6 +158,48 @@ export async function handleTaskInteraction(
   if (interaction.commandName === "model") {
     await handleModelCommand(interaction, context);
   }
+}
+
+export async function handleTaskAutocomplete(
+  interaction: AutocompleteInteraction,
+  context: TaskCommandContext,
+): Promise<void> {
+  const focused = interaction.options.getFocused(true);
+  if (focused.name !== "url") {
+    await interaction.respond([]);
+    return;
+  }
+
+  const repoOption = interaction.options.getString("repo")?.trim();
+  let repo = repoOption ? parseRepoFullName(repoOption) : undefined;
+  if (!repo && interaction.guildId) {
+    const guildRepo = await getGuildRepo(interaction.guildId);
+    if (guildRepo) repo = parseRepoFullName(guildRepo.repo);
+  }
+  if (!repo) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const issues = await withTimeout(
+    fetchOpenIssues(repo, context.githubToken),
+    2_500,
+    [],
+  );
+  const choices = rankIssues(issues, focused.value)
+    .map((issue) => ({
+      name: truncate(`#${issue.number} ${issue.title}`, 100),
+      value: issue.url,
+    }))
+    .filter((choice) => choice.value.length <= 100)
+    .slice(0, 25);
+
+  await interaction.respond(choices).catch((error) => {
+    console.warn(
+      "Could not respond to task autocomplete:",
+      sanitizeError(error, context),
+    );
+  });
 }
 
 export async function handleModelAutocomplete(
@@ -307,6 +352,10 @@ function sanitizeModel(value: string): string | undefined {
   const model = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
   if (!model || /\s/.test(model) || model.length > 200) return undefined;
   return model;
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
 async function withTimeout<T>(

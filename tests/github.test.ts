@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildIssueUrl,
+  fetchOpenIssues,
   findGitHubReference,
   parseGitHubUrl,
   parseRepoFullName,
+  rankIssues,
+  type GitHubIssue,
 } from "../src/tasks/github";
 
 describe("findGitHubReference", () => {
@@ -45,6 +49,97 @@ describe("parseGitHubUrl", () => {
   test("rejects non-github hosts and protocols", () => {
     expect(parseGitHubUrl("http://github.com/owner/repo/issues/1")).toBeUndefined();
     expect(parseGitHubUrl("https://gitlab.com/owner/repo/issues/1")).toBeUndefined();
+  });
+});
+
+describe("rankIssues", () => {
+  const issues: GitHubIssue[] = [
+    { number: 1, title: "Add autocomplete", url: "https://github.com/o/r/issues/1" },
+    { number: 2, title: "Fix autocomplete crash", url: "https://github.com/o/r/issues/2" },
+    { number: 20, title: "Unrelated work", url: "https://github.com/o/r/issues/20" },
+  ];
+
+  test("returns every issue for a blank query", () => {
+    expect(rankIssues(issues, "   ")).toEqual(issues);
+  });
+
+  test("matches by issue number", () => {
+    expect(rankIssues(issues, "#20").map((issue) => issue.number)).toEqual([20]);
+    expect(rankIssues(issues, "20").map((issue) => issue.number)).toEqual([20]);
+  });
+
+  test("matches title substrings and ranks the earlier match higher", () => {
+    expect(
+      rankIssues(issues, "autocomplete").map((issue) => issue.number),
+    ).toEqual([1, 2]);
+  });
+
+  test("supports fuzzy subsequence matches across tokens", () => {
+    expect(rankIssues(issues, "fx acl").map((issue) => issue.number)).toEqual([
+      2,
+    ]);
+  });
+
+  test("drops issues that match none of the tokens", () => {
+    expect(rankIssues(issues, "nonexistent")).toEqual([]);
+  });
+});
+
+describe("buildIssueUrl", () => {
+  test("builds an issue URL from owner/name", () => {
+    expect(buildIssueUrl({ owner: "owner", name: "repo" }, 7)).toBe(
+      "https://github.com/owner/repo/issues/7",
+    );
+  });
+});
+
+describe("fetchOpenIssues", () => {
+  test("returns open issues and skips pull requests", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify([
+          {
+            number: 3,
+            title: "Keep me",
+            html_url: "https://github.com/owner/repo/issues/3",
+          },
+          {
+            number: 4,
+            title: "A pull request",
+            pull_request: { url: "https://api.github.com/..." },
+          },
+        ]),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+
+    try {
+      expect(
+        await fetchOpenIssues({ owner: "owner", name: "repo" }, "token"),
+      ).toEqual([
+        {
+          number: 3,
+          title: "Keep me",
+          url: "https://github.com/owner/repo/issues/3",
+        },
+      ]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("returns an empty list when the request fails", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("nope", { status: 500 })) as unknown as typeof fetch;
+
+    try {
+      expect(
+        await fetchOpenIssues({ owner: "owner", name: "repo" }),
+      ).toEqual([]);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
 

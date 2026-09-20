@@ -39,6 +39,7 @@ import {
   createTaskChannelForRepo,
   createTaskChannelFromReference,
   handleModelAutocomplete,
+  handleTaskAutocomplete,
   handleTaskInteraction,
   registerTaskCommands,
   updateStatusMessage,
@@ -136,6 +137,11 @@ client.on(Events.InteractionCreate, (interaction) => {
     if (interaction.commandName === "model") {
       void handleModelAutocomplete(interaction, taskContext).catch((error) => {
         console.error("Could not handle model autocomplete:", error);
+        void interaction.respond([]).catch(() => undefined);
+      });
+    } else if (interaction.commandName === "task") {
+      void handleTaskAutocomplete(interaction, taskContext).catch((error) => {
+        console.error("Could not handle task autocomplete:", error);
         void interaction.respond([]).catch(() => undefined);
       });
     }
