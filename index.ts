@@ -23,6 +23,11 @@ import {
   updateSessionOpenCodeId,
   updateTask,
 } from "./store";
+import {
+  handleTaskInteraction,
+  registerTaskCommands,
+  updateStatusMessage,
+} from "./tasks";
 
 const token = Bun.env.DISCORD_BOT_TOKEN;
 const providerEnv: Record<string, string> = {};
@@ -59,23 +64,65 @@ const client = new Client({
   ],
 });
 
-client.once(Events.ClientReady, (readyClient) => {
+client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Discord bot logged in as ${readyClient.user.tag}`);
+  await Promise.all(
+    readyClient.guilds.cache.map((guild) =>
+      registerTaskCommands(guild).catch((error) => {
+        console.error(
+          `Could not register commands for guild ${guild.id}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }),
+    ),
+  );
   console.log(
     `Invite it to a server: ${readyClient.generateInvite({
-      scopes: [OAuth2Scopes.Bot],
+      scopes: [OAuth2Scopes.Bot, OAuth2Scopes.ApplicationsCommands],
       permissions: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
         PermissionFlagsBits.ReadMessageHistory,
         PermissionFlagsBits.CreatePublicThreads,
         PermissionFlagsBits.SendMessagesInThreads,
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.ManageMessages,
       ],
     })}`,
   );
 });
 
 const inFlightThreads = new Set<string>();
+
+client.on(Events.GuildCreate, (guild) => {
+  void registerTaskCommands(guild).catch((error) => {
+    console.error(
+      `Could not register commands for guild ${guild.id}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  });
+});
+
+client.on(Events.InteractionCreate, (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  void handleTaskInteraction(interaction, {
+    client,
+    providerEnv,
+    configHash,
+    githubToken,
+  }).catch(async (error) => {
+    console.error("Could not handle Discord command:", error);
+    const response = {
+      content: "The command failed unexpectedly. Check the bot logs for details.",
+      ephemeral: true,
+    } as const;
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(response).catch(() => undefined);
+    } else {
+      await interaction.reply(response).catch(() => undefined);
+    }
+  });
+});
 
 client.on(Events.MessageCreate, (message) => {
   void routeMessage(message).catch((error) => {
@@ -130,7 +177,7 @@ async function routeMessage(message: Message): Promise<void> {
   const task = getTask(message.channel.id);
   if (!task || task.status === "archived") {
     await message.reply(
-      "This channel isn't an active task channel. Task creation via `/task` arrives in the next phase.",
+      "This channel isn't an active task channel. Use `/task` to create one.",
     );
     return;
   }
@@ -145,10 +192,11 @@ async function routeMessage(message: Message): Promise<void> {
   if (prompt.toLowerCase() === "reset") {
     await destroySandbox(message.channel.id, task.sandboxId ?? undefined);
     clearSessionsForChannel(message.channel.id);
-    updateTask(message.channel.id, {
+    const resetTask = updateTask(message.channel.id, {
       sandboxId: null,
       status: "provisioning",
     });
+    if (resetTask) await updateStatusMessage(client, resetTask);
     await message.reply(
       "The sandbox was destroyed and all thread sessions were invalidated. A fresh sandbox will be built on the next prompt.",
     );
@@ -165,6 +213,10 @@ async function routeMessage(message: Message): Promise<void> {
     createdBy: message.author.id,
     createdAt: Date.now(),
   });
+  const taskWithSession = getTask(message.channel.id);
+  if (taskWithSession) {
+    await updateStatusMessage(client, taskWithSession);
+  }
 
   await runThreadPrompt({
     thread,
@@ -227,6 +279,10 @@ async function runThreadPrompt(options: {
                 console.error("Could not send sandbox rebuild notice:", error);
               });
           }
+          const rebuiltTask = getTask(channelId);
+          if (rebuiltTask) {
+            await updateStatusMessage(client, rebuiltTask);
+          }
         },
       });
 
@@ -234,11 +290,12 @@ async function runThreadPrompt(options: {
         sandbox.id !== task.sandboxId ||
         task.configHash !== configHash
       ) {
-        updateTask(channelId, {
+        const readyTask = updateTask(channelId, {
           sandboxId: sandbox.id,
           configHash,
           status: "ready",
         });
+        if (readyTask) await updateStatusMessage(client, readyTask);
       }
 
       let session = getSession(thread.id);
@@ -251,6 +308,10 @@ async function runThreadPrompt(options: {
           createdAt: Date.now(),
         });
         session = getSession(thread.id);
+        const taskWithSession = getTask(channelId);
+        if (taskWithSession) {
+          await updateStatusMessage(client, taskWithSession);
+        }
       }
 
       const storedSessionId = session?.openCodeSessionId ?? undefined;
