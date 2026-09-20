@@ -7,6 +7,7 @@ import {
   type AnyThreadChannel,
   type Message,
 } from "discord.js";
+import { splitForDiscord } from "./discord-output";
 import { runOpenCode } from "./opencode";
 import {
   computeConfigHash,
@@ -383,7 +384,7 @@ async function runThreadPrompt(options: {
       if (response.sessionId !== storedSessionId) {
         await updateSessionOpenCodeId(thread.id, response.sessionId ?? null);
       }
-      await statusMessage?.edit(truncateForDiscord(response.text));
+      await sendDiscordChunks(thread, statusMessage, response.text);
     });
   } catch (error) {
     console.error("OpenCode run failed:", error);
@@ -411,8 +412,21 @@ function createThreadName(prompt: string): string {
   return cleaned.slice(0, 80) || "OpenCode task";
 }
 
-function truncateForDiscord(value: string): string {
-  const limit = 2_000;
-  if (value.length <= limit) return value;
-  return `${value.slice(0, limit - 15)}\n\n[truncated]`;
+async function sendDiscordChunks(
+  thread: AnyThreadChannel,
+  statusMessage: Message | undefined,
+  text: string,
+): Promise<void> {
+  const [first, ...rest] = splitForDiscord(text);
+  if (statusMessage) {
+    await statusMessage.edit(first || "OpenCode finished with no output.");
+  } else if (first) {
+    await thread.send(first);
+  }
+
+  for (const chunk of rest) {
+    await thread.send(chunk).catch((error) => {
+      console.error("Could not send Discord message continuation:", error);
+    });
+  }
 }
