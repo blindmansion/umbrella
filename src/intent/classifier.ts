@@ -3,6 +3,7 @@ export const INTENT_ACTIONS = [
   "create_task",
   "reset",
   "close",
+  "done",
   "ignore",
 ] as const;
 
@@ -52,6 +53,8 @@ const ACTION_CRITERIA: Record<IntentAction, string> = {
     "Reset, restart, or rebuild the current session or sandbox so the bot starts over.",
   close:
     "Close, archive, or tear down the current task and its sandbox.",
+  done:
+    "Report that the work is finished or complete: the task is done, shipped, merged, or resolved, so the bot should mark it complete, archive it, and clean up.",
   ignore:
     "Not meant for the bot: humans talking to each other, reactions, or a message telling the bot to wait or do nothing.",
 };

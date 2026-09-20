@@ -139,6 +139,12 @@ sandbox, reset the task channel to rebuild the sandbox and invalidate all thread
 sessions, or close the task to destroy its sandbox and archive active threads
 while preserving channel history.
 
+Run `/done` in a task channel or any of its session threads when the work is
+finished. It marks the task complete, destroys its sandbox and checkpoint,
+archives every thread, locks the task channel so no further messages can be
+posted, and leaves the channel history in place. The task record stays archived,
+so it no longer counts as active.
+
 ### Resumable sandboxes
 
 Railway sandboxes are torn down after an idle timeout, which used to lose the
@@ -152,6 +158,18 @@ If no checkpoint is available — for example after a configuration change force
 a rebuild, or the restore itself fails — the bot starts a fresh session seeded
 with the task's context and the thread's Discord history, so the conversation
 can still continue. Resetting or closing a task deletes its checkpoint.
+
+### Automatic cleanup of closed references
+
+The bot runs a maintenance pass on startup and every
+`TASK_RECONCILE_INTERVAL_MINUTES` (default `15`; set to `0` to disable). Each
+pass lists active task channels that have a linked GitHub issue or pull request
+and checks whether it is still open. When a reference has closed — for example
+because the pull request merged — the bot completes the task exactly as
+`/done` does: it destroys the sandbox and checkpoint, clears thread sessions,
+archives the threads, and locks the task channel, preserving history. Tasks
+without a GitHub reference and tasks whose state can't be determined are left
+alone, and lookups are retried on the next pass.
 
 Requests that don't have a GitHub issue or pull request run against the
 server's configured repository. An admin sets it once with
@@ -204,13 +222,14 @@ the bot decides what to do. The classifier asks two questions:
 
 - a **noul** question for whether the latest message is directed at the bot
 - a **choice** question for the intended action: `chat`, `create_task`, `reset`,
-  `close`, or `ignore`
+  `close`, `done`, or `ignore`
 
 `create_task` covers both GitHub issue/pull request URLs and requests that run
 against the server's configured repository (see [Discord usage](#discord-usage)).
 The bot acts without an explicit mention when the direction score and the
 action's confidence both clear `INTENT_CONFIDENCE_THRESHOLD` (default `0.6`);
-`reset` and `close` require a little more confidence because they destroy state.
+`reset`, `close`, and `done` require a little more confidence because they
+destroy state.
 Mentions bypass the gate, and low-confidence messages are left alone. Without
 `TYPESAFE_API_KEY`, the bot falls back to mention-only behavior.
 

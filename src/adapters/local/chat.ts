@@ -48,6 +48,10 @@ export class TerminalChat implements ChatPlatform {
     console.log(`[${channelId}] archived active threads`);
   }
 
+  async archiveChannel(channelId: string): Promise<void> {
+    console.log(`[${channelId}] archived and locked the task channel`);
+  }
+
   async recentTurns(msg: IncomingMessage): Promise<ConversationTurn[]> {
     return [...(this.turns.get(msg.threadId ?? msg.channelId) ?? [])].slice(-10);
   }

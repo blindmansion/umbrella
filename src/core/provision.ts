@@ -178,6 +178,30 @@ export async function closeTask(
   manager: SandboxManager,
   channelId: string,
 ): Promise<void> {
+  await teardownTask(deps, manager, channelId);
+  await deps.chat.archiveThreads(channelId);
+}
+
+/**
+ * Mark a task complete: tear down its sandbox and checkpoints, drop its thread
+ * sessions, archive the task channel and its threads, and leave the task
+ * record archived while preserving channel history.
+ */
+export async function completeTask(
+  deps: Deps,
+  manager: SandboxManager,
+  channelId: string,
+): Promise<TaskRecord | undefined> {
+  const archived = await teardownTask(deps, manager, channelId);
+  await deps.chat.archiveChannel(channelId);
+  return archived;
+}
+
+async function teardownTask(
+  deps: Deps,
+  manager: SandboxManager,
+  channelId: string,
+): Promise<TaskRecord | undefined> {
   const task = await deps.store.getTask(channelId);
   if (!task) throw new Error("No task is associated with this channel.");
   await manager.destroy(channelId, task.sandboxId);
@@ -187,7 +211,7 @@ export async function closeTask(
     sandboxId: null,
   });
   if (archived) await updateStatusMessage(deps, archived);
-  await deps.chat.archiveThreads(channelId);
+  return archived;
 }
 
 export async function updateStatusMessage(

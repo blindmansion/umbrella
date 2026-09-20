@@ -4,6 +4,7 @@ import type {
   GitHubIssue,
   GitHubMetadata,
   GitHubReference,
+  GitHubReferenceState,
   RepoReference,
 } from "../../core/ports";
 
@@ -12,7 +13,37 @@ export function createGitHubClient(token?: string): GitHubClient {
     fetchMetadata: (reference) => fetchGitHubMetadata(reference, token),
     fetchDefaultBranch: (repo) => fetchRepoDefaultBranch(repo, token),
     fetchOpenIssues: (repo) => fetchOpenIssues(repo, token),
+    fetchReferenceState: (reference) => fetchReferenceState(reference, token),
   };
+}
+
+export async function fetchReferenceState(
+  reference: GitHubReference,
+  githubToken?: string,
+): Promise<GitHubReferenceState | undefined> {
+  const base = `https://api.github.com/repos/${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.name)}`;
+  const detailPath =
+    reference.urlKind === "pull"
+      ? `pulls/${reference.number}`
+      : `issues/${reference.number}`;
+  try {
+    const response = await fetch(`${base}/${detailPath}`, {
+      headers: githubHeaders(githubToken),
+    });
+    if (!response.ok) return undefined;
+    const data = (await response.json()) as {
+      state?: unknown;
+      merged?: unknown;
+      merged_at?: unknown;
+    };
+    if (data.state !== "open" && data.state !== "closed") return undefined;
+    return {
+      state: data.state,
+      merged: Boolean(data.merged) || Boolean(data.merged_at),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function githubHeaders(githubToken?: string): Record<string, string> {

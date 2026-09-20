@@ -8,10 +8,12 @@ import { findGitHubReference, parseRepoFullName } from "./github";
 import { runThreadPrompt } from "./prompts";
 import {
   closeTask,
+  completeTask,
   provisionFromCommand,
   updateStatusMessage,
 } from "./provision";
 import { ChannelQueue } from "./queue";
+import { reconcileClosedReferences } from "./reconcile";
 import {
   buildPendingPrompt,
   classifyAction,
@@ -75,6 +77,14 @@ export function createUmbrella(deps: Deps) {
           msg,
           "Session reset. Your next prompt will start a fresh OpenCode session in the same sandbox.",
         );
+        return;
+      }
+      if (action === "done") {
+        await deps.chat.reply(
+          msg,
+          "Marking this work complete, archiving the task, and cleaning up its sandbox...",
+        );
+        await completeTask(deps, manager, session.channelId);
         return;
       }
       if (action !== "chat" && action !== "create_task") return;
@@ -213,6 +223,14 @@ export function createUmbrella(deps: Deps) {
       await closeTask(deps, manager, msg.channelId);
       return;
     }
+    if (action === "done") {
+      await deps.chat.reply(
+        msg,
+        "Marking this work complete, archiving the task, and cleaning up its sandbox...",
+      );
+      await completeTask(deps, manager, msg.channelId);
+      return;
+    }
     if (action === "create_task" && reference) {
       const notice = await deps.chat.reply(
         msg,
@@ -298,6 +316,21 @@ export function createUmbrella(deps: Deps) {
           ok: true,
           message:
             "Task archived and its sandbox destroyed. Channel history has been preserved.",
+        };
+      }
+      if (command.type === "done") {
+        const task = await deps.store.getTask(command.channelId);
+        if (!task) {
+          return {
+            ok: false,
+            message: "No task is associated with this channel.",
+          };
+        }
+        await completeTask(deps, manager, command.channelId);
+        return {
+          ok: true,
+          message:
+            "Work marked complete. The task channel is archived, its threads are archived, and the sandbox has been cleaned up.",
         };
       }
       if (command.type === "repo") {
@@ -387,6 +420,7 @@ export function createUmbrella(deps: Deps) {
   return {
     onMessage,
     onCommand,
+    runMaintenance: () => reconcileClosedReferences(deps, manager),
     getAvailableModels: async (channelId: string) => {
       const task = await deps.store.getTask(channelId);
       if (!task?.sandboxId) return [];

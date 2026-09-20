@@ -14,9 +14,11 @@ export type AppConfig = CoreConfig & {
   tracing?: SandboxTracing;
   networkIsolation: "PRIVATE" | "ISOLATED";
   intent?: IntentConfig;
+  reconcileIntervalMinutes?: number;
 };
 
 const DEFAULT_INTENT_CONFIDENCE = 0.6;
+const DEFAULT_RECONCILE_INTERVAL_MINUTES = 15;
 
 function parseConfidenceThreshold(value: string | undefined): number {
   if (value === undefined || value.trim() === "") {
@@ -25,6 +27,17 @@ function parseConfidenceThreshold(value: string | undefined): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_INTENT_CONFIDENCE;
   return Math.min(1, Math.max(0, parsed));
+}
+
+function parseReconcileIntervalMinutes(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_RECONCILE_INTERVAL_MINUTES;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_RECONCILE_INTERVAL_MINUTES;
+  }
+  return Math.floor(parsed);
 }
 
 export function loadConfig(): AppConfig {
@@ -102,5 +115,8 @@ export function loadConfig(): AppConfig {
     networkIsolation,
     intent,
     intentConfidenceThreshold: intent?.confidenceThreshold,
+    reconcileIntervalMinutes: parseReconcileIntervalMinutes(
+      Bun.env.TASK_RECONCILE_INTERVAL_MINUTES,
+    ),
   };
 }

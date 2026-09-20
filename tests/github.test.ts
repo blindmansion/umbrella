@@ -6,7 +6,7 @@ import {
   parseRepoFullName,
   rankIssues,
 } from "../src/core/github";
-import { fetchOpenIssues } from "../src/adapters/github/client";
+import { fetchOpenIssues, fetchReferenceState } from "../src/adapters/github/client";
 import type { GitHubIssue } from "../src/core/ports";
 
 describe("findGitHubReference", () => {
@@ -137,6 +137,85 @@ describe("fetchOpenIssues", () => {
       expect(
         await fetchOpenIssues({ owner: "owner", name: "repo" }),
       ).toEqual([]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
+describe("fetchReferenceState", () => {
+  test("reads a closed issue", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ state: "closed" }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    try {
+      expect(
+        await fetchReferenceState({
+          owner: "owner",
+          name: "repo",
+          number: 7,
+          urlKind: "issue",
+        }),
+      ).toEqual({ state: "closed", merged: false });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("reads a merged pull request", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ state: "closed", merged: true }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+
+    try {
+      expect(
+        await fetchReferenceState({
+          owner: "owner",
+          name: "repo",
+          number: 7,
+          urlKind: "pull",
+        }),
+      ).toEqual({ state: "closed", merged: true });
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("returns undefined when the request fails or the body is unexpected", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("nope", { status: 404 })) as unknown as typeof fetch;
+    try {
+      expect(
+        await fetchReferenceState({
+          owner: "owner",
+          name: "repo",
+          number: 7,
+          urlKind: "issue",
+        }),
+      ).toBeUndefined();
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ state: "weird" }), {
+        status: 200,
+      })) as unknown as typeof fetch;
+    try {
+      expect(
+        await fetchReferenceState({
+          owner: "owner",
+          name: "repo",
+          number: 7,
+          urlKind: "issue",
+        }),
+      ).toBeUndefined();
     } finally {
       globalThis.fetch = original;
     }

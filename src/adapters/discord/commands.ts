@@ -59,6 +59,9 @@ const definitions = [
         .setMaxLength(255),
     ),
   new SlashCommandBuilder()
+    .setName("done")
+    .setDescription("Mark this work complete, archive it, and clean up its sandbox"),
+  new SlashCommandBuilder()
     .setName("close")
     .setDescription("Archive this task and destroy its sandbox"),
   new SlashCommandBuilder()
@@ -129,15 +132,24 @@ export async function handleCommand(
       kind: (interaction.options.getString("kind") as TaskKind | null) ?? undefined,
       branch: interaction.options.getString("branch")?.trim(),
     };
-  } else if (interaction.commandName === "close") {
+  } else if (
+    interaction.commandName === "close" ||
+    interaction.commandName === "done"
+  ) {
     const channelId = interaction.channel?.isThread()
       ? interaction.channel.parentId
       : interaction.channelId;
     if (!channelId) {
-      await interaction.reply({ content: "`/close` must be used in a task channel.", ephemeral: true });
+      await interaction.reply({
+        content: `\`/${interaction.commandName}\` must be used in a task channel or one of its threads.`,
+        ephemeral: true,
+      });
       return;
     }
-    command = { type: "close", channelId };
+    command =
+      interaction.commandName === "done"
+        ? { type: "done", channelId }
+        : { type: "close", channelId };
   } else if (interaction.commandName === "model") {
     const threadId = interaction.channel?.isThread()
       ? interaction.channel.id
