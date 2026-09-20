@@ -56,12 +56,10 @@ const model =
     ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
 
-// Sandboxes only emit traces when we know where Phoenix lives. In production
-// that is usually a private Railway address (`http://phoenix.railway.internal:6006`);
-// in development, run `bun run dev` and point PHOENIX_SANDBOX_ENDPOINT at a
-// tunnel to the local Phoenix container.
-const phoenixEndpoint =
-  Bun.env.PHOENIX_SANDBOX_ENDPOINT ?? Bun.env.PHOENIX_ENDPOINT;
+// Sandboxes only emit traces when we know where Phoenix lives. The endpoint
+// must be reachable from the sandbox: on Railway that is usually the private
+// address `http://phoenix.railway.internal:6006`.
+const phoenixEndpoint = Bun.env.PHOENIX_ENDPOINT;
 const phoenixTracing: SandboxTracing | undefined = phoenixEndpoint
   ? { endpoint: phoenixEndpoint, apiKey: Bun.env.PHOENIX_API_KEY }
   : undefined;
@@ -112,7 +110,7 @@ client.once(Events.ClientReady, async (readyClient) => {
     );
   } else {
     console.log(
-      "OpenCode tracing disabled. Set PHOENIX_SANDBOX_ENDPOINT (or PHOENIX_ENDPOINT) to a Phoenix URL reachable from Railway sandboxes to enable it.",
+      "OpenCode tracing disabled. Set PHOENIX_ENDPOINT to a Phoenix URL reachable from Railway sandboxes to enable it.",
     );
   }
 });
