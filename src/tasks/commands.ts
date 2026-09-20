@@ -2,6 +2,7 @@ import {
   ChannelType,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type Client,
   type Guild,
@@ -10,17 +11,21 @@ import {
 import type { SandboxNetworkIsolation } from "railway";
 import {
   destroySandbox,
+  getExistingSandbox,
   getOrCreateSandbox,
 } from "../sandbox/manager";
 import { runExclusive } from "../sandbox/queue";
+import { clearModelCache, getAvailableModels } from "../opencode/models";
 import {
   clearSessionsForChannel,
   createTask,
   getGuildRepo,
+  getSession,
   getTask,
   listSessionsForChannel,
   setGuildRepo,
   clearGuildRepo,
+  updateSessionModel,
   updateTask,
   type TaskKind,
   type TaskRecord,
@@ -84,6 +89,19 @@ const closeCommand = new SlashCommandBuilder()
   .setName("close")
   .setDescription("Archive this task and destroy its sandbox");
 
+const modelCommand = new SlashCommandBuilder()
+  .setName("model")
+  .setDescription("Show or set the OpenCode model for this session")
+  .addStringOption((option) =>
+    option
+      .setName("model")
+      .setDescription(
+        "Model to use in this thread. Autocompletes from the running sandbox.",
+      )
+      .setAutocomplete(true)
+      .setMaxLength(200),
+  );
+
 const repoCommand = new SlashCommandBuilder()
   .setName("repo")
   .setDescription("Show or set this server's default task repository")
@@ -114,6 +132,7 @@ export async function registerTaskCommands(guild: Guild): Promise<void> {
     taskCommand.toJSON(),
     closeCommand.toJSON(),
     repoCommand.toJSON(),
+    modelCommand.toJSON(),
   ]);
 }
 
@@ -131,6 +150,180 @@ export async function handleTaskInteraction(
   }
   if (interaction.commandName === "repo") {
     await handleRepoCommand(interaction);
+    return;
+  }
+  if (interaction.commandName === "model") {
+    await handleModelCommand(interaction, context);
+  }
+}
+
+export async function handleModelAutocomplete(
+  interaction: AutocompleteInteraction,
+  context: TaskCommandContext,
+): Promise<void> {
+  const channelId = taskChannelIdFor(interaction);
+  const focused = interaction.options.getFocused().toLowerCase();
+
+  const task = await getTask(channelId);
+  if (!task || task.status === "archived") {
+    await interaction.respond([]);
+    return;
+  }
+
+  if (!task.sandboxId) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const sandbox = await getExistingSandbox(task.channelId, task.sandboxId);
+  if (!sandbox) {
+    await interaction.respond([]);
+    return;
+  }
+
+  const models = await withTimeout(
+    getAvailableModels(task.channelId, sandbox),
+    2_000,
+    [],
+  );
+  const choices = models
+    .filter(
+      (model) => model.length <= 100 && model.toLowerCase().includes(focused),
+    )
+    .slice(0, 25)
+    .map((model) => ({ name: model, value: model }));
+
+  await interaction.respond(choices).catch((error) => {
+    console.warn(
+      "Could not respond to model autocomplete:",
+      sanitizeError(error, context),
+    );
+  });
+}
+
+async function handleModelCommand(
+  interaction: ChatInputCommandInteraction,
+  context: TaskCommandContext,
+): Promise<void> {
+  if (!interaction.inCachedGuild()) {
+    await interaction.reply({
+      content: "`/model` can only be used in a server.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const requested = interaction.options.getString("model")?.trim();
+
+  const channel = interaction.channel;
+  if (!channel) {
+    await interaction.reply({
+      content: "`/model` must be used inside an active task channel or thread.",
+      ephemeral: true,
+    });
+    return;
+  }
+  if (channel.isThread()) {
+    const session = await getSession(channel.id);
+    if (!session) {
+      await interaction.reply({
+        content:
+          "This thread isn't a bot session. Start one from the task channel first.",
+        ephemeral: true,
+      });
+      return;
+    }
+    if (!requested) {
+      await interaction.reply(
+        session.model
+          ? `This session uses \`${session.model}\`.`
+          : "This session uses the server default. Pass a `model` option to choose one.",
+      );
+      return;
+    }
+    const model = sanitizeModel(requested);
+    if (!model) {
+      await interaction.reply({
+        content: "That model name isn't valid.",
+        ephemeral: true,
+      });
+      return;
+    }
+    await updateSessionModel(channel.id, model);
+    clearModelCache(session.channelId);
+    await interaction.reply(
+      `This session will use \`${model}\` for subsequent prompts.`,
+    );
+    return;
+  }
+
+  const task = await getTask(channel.id);
+  if (!task || task.status === "archived") {
+    await interaction.reply({
+      content:
+        "`/model` must be used inside an active task channel or one of its threads.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (!requested) {
+    await interaction.reply(
+      task.model
+        ? `This task uses \`${task.model}\`. New threads inherit it.`
+        : "This task uses the server default. Pass a `model` option to choose one for new threads.",
+    );
+    return;
+  }
+
+  const model = sanitizeModel(requested);
+  if (!model) {
+    await interaction.reply({
+      content: "That model name isn't valid.",
+      ephemeral: true,
+    });
+    return;
+  }
+  const updated = await updateTask(task.channelId, { model });
+  if (updated) await updateStatusMessage(context.client, updated);
+  const taskChannelId = taskChannelIdFor(interaction);
+  clearModelCache(taskChannelId);
+  await interaction.reply(
+    `New sessions in this task will use \`${model}\`. Threads with their own model keep it.`,
+  );
+}
+
+function taskChannelIdFor(
+  interaction: ChatInputCommandInteraction | AutocompleteInteraction,
+): string {
+  const channel = interaction.channel;
+  if (channel?.isThread()) {
+    return channel.parentId ?? channel.id;
+  }
+  return interaction.channelId;
+}
+
+function sanitizeModel(value: string): string | undefined {
+  const model = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  if (!model || /\s/.test(model) || model.length > 200) return undefined;
+  return model;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -404,6 +597,7 @@ async function provisionTaskChannel(options: {
     status: "provisioning",
     configHash: null,
     statusMessageId: null,
+    model: null,
     createdAt: Date.now(),
   };
   await createTask(task);
@@ -559,6 +753,7 @@ async function renderTaskStatus(task: TaskRecord): Promise<string> {
   return [
     `**Task:** ${task.repo}${task.refNumber === null ? "" : ` #${task.refNumber}`} — ${reference}`,
     `**Kind:** ${task.kind}  **Branch:** \`${task.branch.replaceAll("`", "'")}\``,
+    `**Model:** ${task.model ? `\`${task.model.replaceAll("`", "'")}\`` : "server default"}`,
     `**Status:** ${task.status}  **Sandbox:** \`${task.sandboxId ?? "none"}\``,
     `**Sessions/threads:** ${sessions}`,
     `**Last updated:** <t:${Math.floor(Date.now() / 1_000)}:R>`,

@@ -138,6 +138,13 @@ repository, provisions a sandbox on its default branch, and starts a session
 with what you asked. `/task` also accepts a `repo` option for a one-off
 repository, and its `url` option is now optional.
 
+A task channel and each of its threads use the model from `OPENCODE_MODEL`
+unless overridden with `/model`. Run `/model` in a task channel to set the
+model for sessions started there, or inside a thread to set it for that
+session. The `model` option autocompletes from the models OpenCode reports in
+the task's running sandbox, so it only offers providers whose credentials are
+configured. Running `/model` with no option shows the current effective model.
+
 These ad-hoc sessions clone the default branch and let the agent decide what to
 do next. The bot doesn't pre-create a branch or open a pull request; the agent
 branches, commits, pushes, and opens a pull request as needed.

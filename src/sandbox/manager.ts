@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Sandbox, type SandboxNetworkIsolation } from "railway";
+import { clearModelCache } from "../opencode/models";
 import { shellQuote } from "../opencode/runner";
 import type { TaskRecord } from "../store";
 import {
@@ -116,6 +117,7 @@ export async function getOrCreateSandbox(options: {
   }
 
   liveSandboxes.set(task.channelId, sandbox);
+  clearModelCache(task.channelId);
   await onRebuild?.();
   return { sandbox, rebuilt: true };
 }
@@ -223,6 +225,7 @@ export async function destroySandbox(
 ): Promise<void> {
   const cached = liveSandboxes.get(channelId);
   liveSandboxes.delete(channelId);
+  clearModelCache(channelId);
 
   if (cached) {
     await cached.destroy().catch((error) => {
@@ -236,6 +239,27 @@ export async function destroySandbox(
     await sandbox?.destroy().catch((error) => {
       console.warn(`Could not destroy sandbox ${sandboxId}:`, error);
     });
+  }
+}
+
+export async function getExistingSandbox(
+  channelId: string,
+  sandboxId?: string | null,
+): Promise<Sandbox | undefined> {
+  const cached = liveSandboxes.get(channelId);
+  if (cached) return cached;
+  if (!sandboxId) return undefined;
+
+  try {
+    const sandbox = await Sandbox.connect(sandboxId);
+    liveSandboxes.set(channelId, sandbox);
+    return sandbox;
+  } catch (error) {
+    console.warn(
+      `Could not connect to sandbox ${sandboxId} to list models:`,
+      sanitizeError(error),
+    );
+    return undefined;
   }
 }
 

@@ -147,3 +147,37 @@ function collectOpenCodeEvent(
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
+
+export async function listOpenCodeModels(
+  sandbox: Sandbox,
+  options: { timeoutSec?: number } = {},
+): Promise<string[]> {
+  const result = await sandbox.exec("opencode models", {
+    cwd: "/root/workspace",
+    timeoutSec: options.timeoutSec ?? 60,
+  });
+  if (result.timedOut) {
+    throw new Error("Listing OpenCode models timed out");
+  }
+  if (result.exitCode !== 0) {
+    throw new Error(
+      result.stderr.trim() ||
+        `opencode models exited with code ${result.exitCode}`,
+    );
+  }
+  return parseModelList(result.stdout);
+}
+
+export function parseModelList(output: string): string[] {
+  const seen = new Set<string>();
+  const models: string[] = [];
+  for (const raw of output.split("\n")) {
+    const line = raw.trim();
+    if (!line || /\s/.test(line)) continue;
+    if (!/^[^/\s]+\/[^\s]+$/.test(line)) continue;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    models.push(line);
+  }
+  return models;
+}
