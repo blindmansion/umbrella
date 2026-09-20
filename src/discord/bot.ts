@@ -7,15 +7,13 @@ import {
   type AnyThreadChannel,
   type Message,
 } from "discord.js";
-import { splitForDiscord } from "./discord-output";
-import { runOpenCode } from "./opencode";
+import { loadConfig } from "../config";
+import { runOpenCode } from "../opencode/runner";
 import {
-  computeConfigHash,
   destroySandbox,
   getOrCreateSandbox,
-  queueDepth,
-  runExclusive,
-} from "./sandboxes";
+} from "../sandbox/manager";
+import { queueDepth, runExclusive } from "../sandbox/queue";
 import {
   clearSessionsForChannel,
   createSession,
@@ -24,67 +22,23 @@ import {
   initializeStore,
   updateSessionOpenCodeId,
   updateTask,
-} from "./store";
-import type { SandboxTracing } from "./tracing";
+} from "../store";
 import {
   handleTaskInteraction,
   registerTaskCommands,
   updateStatusMessage,
-} from "./tasks";
+} from "../tasks/commands";
+import { splitForDiscord } from "./output";
 
-const token = Bun.env.DISCORD_BOT_TOKEN;
-const providerEnv: Record<string, string> = {};
-const githubToken = Bun.env.GITHUB_TOKEN;
-
-if (Bun.env.ANTHROPIC_API_KEY) {
-  providerEnv.ANTHROPIC_API_KEY = Bun.env.ANTHROPIC_API_KEY;
-}
-if (Bun.env.FIREWORKS_API_KEY) {
-  providerEnv.FIREWORKS_API_KEY = Bun.env.FIREWORKS_API_KEY;
-}
-
-const sandboxEnv: Record<string, string> = { ...providerEnv };
-if (githubToken) {
-  sandboxEnv.GITHUB_TOKEN = githubToken;
-  sandboxEnv.GH_TOKEN = githubToken;
-}
-if (Bun.env.GIT_AUTHOR_NAME) {
-  sandboxEnv.GIT_AUTHOR_NAME = Bun.env.GIT_AUTHOR_NAME;
-  sandboxEnv.GIT_COMMITTER_NAME = Bun.env.GIT_AUTHOR_NAME;
-}
-if (Bun.env.GIT_AUTHOR_EMAIL) {
-  sandboxEnv.GIT_AUTHOR_EMAIL = Bun.env.GIT_AUTHOR_EMAIL;
-  sandboxEnv.GIT_COMMITTER_EMAIL = Bun.env.GIT_AUTHOR_EMAIL;
-}
-
-if (!token) {
-  throw new Error("DISCORD_BOT_TOKEN must be set in .env");
-}
-if (Object.keys(providerEnv).length === 0) {
-  throw new Error(
-    "ANTHROPIC_API_KEY or FIREWORKS_API_KEY must be set in .env",
-  );
-}
-
-const model =
-  Bun.env.OPENCODE_MODEL ??
-  (providerEnv.FIREWORKS_API_KEY
-    ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
-    : "anthropic/claude-sonnet-4-6");
-
-// Sandboxes only emit traces when we know where Phoenix lives. The endpoint
-// must be reachable from the sandbox: on Railway that is usually the private
-// address `http://phoenix.railway.internal:6006`.
-const phoenixEndpoint = Bun.env.PHOENIX_ENDPOINT;
-const phoenixTracing: SandboxTracing | undefined = phoenixEndpoint
-  ? { endpoint: phoenixEndpoint, apiKey: Bun.env.PHOENIX_API_KEY }
-  : undefined;
-const networkIsolation =
-  Bun.env.SANDBOX_NETWORK_ISOLATION === "PRIVATE" ? "PRIVATE" : "ISOLATED";
-const configHash = computeConfigHash(model, sandboxEnv, {
+const {
+  token,
+  model,
+  sandboxEnv,
+  configHash,
+  githubToken,
   tracing: phoenixTracing,
   networkIsolation,
-});
+} = loadConfig();
 
 const client = new Client({
   intents: [

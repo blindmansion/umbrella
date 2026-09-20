@@ -9,8 +9,8 @@ import type { SandboxNetworkIsolation } from "railway";
 import {
   destroySandbox,
   getOrCreateSandbox,
-  runExclusive,
-} from "./sandboxes";
+} from "../sandbox/manager";
+import { runExclusive } from "../sandbox/queue";
 import {
   clearSessionsForChannel,
   createTask,
@@ -19,8 +19,14 @@ import {
   updateTask,
   type TaskKind,
   type TaskRecord,
-} from "./store";
-import type { SandboxTracing } from "./tracing";
+} from "../store";
+import type { SandboxTracing } from "../tracing/phoenix";
+import {
+  fetchGitHubMetadata,
+  inferBranch,
+  parseGitHubUrl,
+} from "./github";
+import { createChannelName, slugify } from "./naming";
 
 export type TaskCommandContext = {
   client: Client;
@@ -29,19 +35,6 @@ export type TaskCommandContext = {
   githubToken?: string;
   tracing?: SandboxTracing;
   networkIsolation?: SandboxNetworkIsolation;
-};
-
-type GitHubReference = {
-  owner: string;
-  name: string;
-  number: number;
-  urlKind: "issue" | "pull";
-};
-
-type GitHubMetadata = {
-  title?: string;
-  headRef?: string;
-  defaultBranch?: string;
 };
 
 const taskCommand = new SlashCommandBuilder()
@@ -301,96 +294,6 @@ async function closeTaskChannel(
   }
 }
 
-function parseGitHubUrl(value: string): GitHubReference | undefined {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return undefined;
-  }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "github.com") {
-    return undefined;
-  }
-
-  const match = url.pathname.match(
-    /^\/([^/]+)\/([^/]+)\/(issues|pull)\/([1-9]\d*)\/?$/,
-  );
-  if (!match) return undefined;
-  return {
-    owner: match[1]!,
-    name: match[2]!,
-    urlKind: match[3] === "pull" ? "pull" : "issue",
-    number: Number(match[4]),
-  };
-}
-
-async function fetchGitHubMetadata(
-  reference: GitHubReference,
-  githubToken?: string,
-): Promise<GitHubMetadata> {
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "railway-opencode-discord-bot",
-  };
-  if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
-
-  const base = `https://api.github.com/repos/${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.name)}`;
-  const metadata: GitHubMetadata = {};
-  const detailPath =
-    reference.urlKind === "pull"
-      ? `pulls/${reference.number}`
-      : `issues/${reference.number}`;
-
-  const [detailResult, repoResult] = await Promise.allSettled([
-    fetch(`${base}/${detailPath}`, { headers }),
-    fetch(base, { headers }),
-  ]);
-
-  if (detailResult.status === "fulfilled" && detailResult.value.ok) {
-    try {
-      const detail = (await detailResult.value.json()) as {
-        title?: unknown;
-        head?: { ref?: unknown };
-      };
-      if (typeof detail.title === "string") metadata.title = detail.title;
-      if (typeof detail.head?.ref === "string") metadata.headRef = detail.head.ref;
-    } catch {
-      // Fall back to URL-derived metadata.
-    }
-  }
-  if (repoResult.status === "fulfilled" && repoResult.value.ok) {
-    try {
-      const repo = (await repoResult.value.json()) as {
-        default_branch?: unknown;
-      };
-      if (typeof repo.default_branch === "string") {
-        metadata.defaultBranch = repo.default_branch;
-      }
-    } catch {
-      // Fall back to "main".
-    }
-  }
-
-  return metadata;
-}
-
-function inferBranch(options: {
-  kind: TaskKind;
-  number: number;
-  slug: string;
-  explicitBranch?: string;
-  metadata: GitHubMetadata;
-}): string {
-  if (options.explicitBranch) return options.explicitBranch;
-  if (options.kind === "feature") {
-    return `feat/${options.number}-${options.slug}`;
-  }
-  if (options.kind === "review" && options.metadata.headRef) {
-    return options.metadata.headRef;
-  }
-  return options.metadata.defaultBranch ?? "main";
-}
-
 async function findOrCreateRepoCategory(
   guild: Guild,
   owner: string,
@@ -409,32 +312,6 @@ async function findOrCreateRepoCategory(
     type: ChannelType.GuildCategory,
     reason: `Task category for ${owner}/${name}`,
   });
-}
-
-function createChannelName(
-  kind: TaskKind,
-  number: number | null,
-  slug: string,
-): string {
-  const prefixes: Record<TaskKind, string> = {
-    planning: "plan",
-    feature: "feat",
-    bugfix: "bug",
-    review: "pr",
-  };
-  const stem = `${prefixes[kind]}${number === null ? "" : `-${number}`}`;
-  const maxSlugLength = Math.max(1, 60 - stem.length - 1);
-  return `${stem}-${slug.slice(0, maxSlugLength)}`.slice(0, 100);
-}
-
-function slugify(value: string): string {
-  return value
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-+/g, "-");
 }
 
 async function renderTaskStatus(task: TaskRecord): Promise<string> {

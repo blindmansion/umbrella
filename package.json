@@ -1,10 +1,10 @@
 {
   "name": "umbrella",
-  "module": "index.ts",
+  "module": "src/index.ts",
   "type": "module",
   "scripts": {
-    "start": "bun run index.ts",
-    "dev": "bun --watch index.ts",
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "railway:plan": "railway config plan",

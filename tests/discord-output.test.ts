@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   MAX_DISCORD_OUTPUT_MESSAGES,
   splitForDiscord,
-} from "./discord-output";
+} from "../src/discord/output";
 
 describe("splitForDiscord", () => {
   test("leaves short messages unchanged", () => {

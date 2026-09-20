@@ -1,5 +1,5 @@
 import type { Sandbox } from "railway";
-import type { TaskRecord } from "./store";
+import type { TaskRecord } from "../store";
 
 export type SandboxTracing = {
   /** Phoenix base URL reachable from inside a Railway sandbox. */

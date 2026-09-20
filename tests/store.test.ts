@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { newDb } from "pg-mem";
-import { queueDepth, runExclusive } from "./sandboxes";
+import { queueDepth, runExclusive } from "../src/sandbox/queue";
 import {
   createStore,
   type DatabasePool,
   type SessionRecord,
   type TaskRecord,
-} from "./store";
+} from "../src/store";
 
 async function createTestStore() {
   const memory = newDb({ autoCreateForeignKeyIndices: true });
