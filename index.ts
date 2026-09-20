@@ -40,6 +40,17 @@ type SessionState = {
   openCodeSessionId?: string;
 };
 
+type ProgressEvent =
+  | { type: "step_start" }
+  | {
+      type: "tool_use";
+      tool: string;
+      status: string;
+      title?: string;
+      input?: Record<string, unknown>;
+    }
+  | { type: "error" };
+
 let sessionState = await loadSessionState();
 let activeSandbox: Sandbox | undefined;
 
@@ -99,7 +110,25 @@ client.on(Events.MessageCreate, async (message) => {
       return;
     }
 
-    const response = await runOpenCode(prompt);
+    let step = 0;
+    const response = await runOpenCode(prompt, async (event) => {
+      if (event.type === "step_start") {
+        step += 1;
+        await reply.edit(
+          step === 1
+            ? "OpenCode is thinking..."
+            : `OpenCode is continuing (step ${step})...`,
+        );
+      }
+
+      if (event.type === "tool_use") {
+        await message.channel.send(formatToolEvent(event));
+      }
+
+      if (event.type === "error") {
+        await message.channel.send("✗ OpenCode reported an error.");
+      }
+    });
     await reply.edit(truncateForDiscord(response));
   } catch (error) {
     console.error("OpenCode run failed:", error);
@@ -115,15 +144,24 @@ client.on(Events.Error, (error) => {
 
 await client.login(token);
 
-async function runOpenCode(prompt: string) {
+async function runOpenCode(
+  prompt: string,
+  onProgress: (event: ProgressEvent) => Promise<void>,
+) {
   const sandbox = await getOrCreateSandbox();
   const textParts: string[] = [];
   const stderrParts: string[] = [];
   let stdoutBuffer = "";
   let discoveredSessionId: string | undefined;
+  let progressQueue = Promise.resolve();
   const sessionFlag = sessionState?.openCodeSessionId
     ? ` --session ${shellQuote(sessionState.openCodeSessionId)}`
     : "";
+  const queueProgress = (event: ProgressEvent) => {
+    progressQueue = progressQueue
+      .then(() => onProgress(event))
+      .catch((error) => console.error("Could not send progress update:", error));
+  };
 
   await sandbox.files.mkdir("/root/workspace");
   await sandbox.files.write("/tmp/opencode-prompt.txt", prompt);
@@ -143,7 +181,8 @@ async function runOpenCode(prompt: string) {
         stdoutBuffer = lines.pop() ?? "";
         for (const line of lines) {
           discoveredSessionId =
-            collectOpenCodeEvent(line, textParts) ?? discoveredSessionId;
+            collectOpenCodeEvent(line, textParts, queueProgress) ??
+            discoveredSessionId;
         }
       },
       onStderr: (chunk) => stderrParts.push(chunk),
@@ -155,8 +194,10 @@ async function runOpenCode(prompt: string) {
 
   if (stdoutBuffer.trim()) {
     discoveredSessionId =
-      collectOpenCodeEvent(stdoutBuffer, textParts) ?? discoveredSessionId;
+      collectOpenCodeEvent(stdoutBuffer, textParts, queueProgress) ??
+      discoveredSessionId;
   }
+  await progressQueue;
   if (result.timedOut) throw new Error("OpenCode timed out");
   if (result.exitCode !== 0) {
     throw new Error(
@@ -177,19 +218,46 @@ async function runOpenCode(prompt: string) {
   return response;
 }
 
-function collectOpenCodeEvent(line: string, textParts: string[]) {
+function collectOpenCodeEvent(
+  line: string,
+  textParts: string[],
+  onProgress: (event: ProgressEvent) => void,
+) {
   if (!line.trim()) return undefined;
 
   try {
     const event = JSON.parse(line) as {
       type?: string;
       text?: string;
-      part?: { text?: string };
+      part?: {
+        text?: string;
+        tool?: string;
+        state?: {
+          status?: string;
+          title?: string;
+          input?: Record<string, unknown>;
+        };
+      };
       sessionID?: string;
     };
     if (event.type === "text") {
       const text = event.part?.text ?? event.text;
       if (text) textParts.push(text);
+    }
+    if (event.type === "step_start") {
+      onProgress({ type: "step_start" });
+    }
+    if (event.type === "tool_use") {
+      onProgress({
+        type: "tool_use",
+        tool: event.part?.tool ?? "tool",
+        status: event.part?.state?.status ?? "completed",
+        title: event.part?.state?.title,
+        input: event.part?.state?.input,
+      });
+    }
+    if (event.type === "error") {
+      onProgress({ type: "error" });
     }
     return event.sessionID;
   } catch {
@@ -276,6 +344,49 @@ async function clearSessionState() {
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function formatToolEvent(event: Extract<ProgressEvent, { type: "tool_use" }>) {
+  const succeeded = event.status === "completed";
+  const detail = sanitizeToolDetail(
+    event.title ?? summarizeToolInput(event.input),
+  );
+  return `${succeeded ? "✓" : "✗"} **${event.tool.replaceAll("*", "")}**${detail ? ` — \`${detail}\`` : ""}`;
+}
+
+function summarizeToolInput(input?: Record<string, unknown>) {
+  if (!input) return "";
+
+  for (const key of [
+    "command",
+    "filePath",
+    "path",
+    "pattern",
+    "query",
+    "description",
+    "url",
+  ]) {
+    if (typeof input[key] === "string") return input[key];
+  }
+
+  return "";
+}
+
+function sanitizeToolDetail(value: string) {
+  let sanitized = value.replace(/\s+/g, " ").replaceAll("`", "'");
+
+  const secrets = [token, ...Object.values(providerEnv)].filter(
+    (secret): secret is string => Boolean(secret),
+  );
+  for (const secret of secrets) {
+    sanitized = sanitized.replaceAll(secret, "[redacted]");
+  }
+
+  sanitized = sanitized.replace(
+    /(token|api[_-]?key|secret|password)(\s*[:=]\s*)\S+/gi,
+    "$1$2[redacted]",
+  );
+  return sanitized.slice(0, 300);
 }
 
 function truncateForDiscord(value: string) {
