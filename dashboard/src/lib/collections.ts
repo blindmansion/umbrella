@@ -35,6 +35,18 @@ async function persist(changes: Partial<UserSettings>) {
 }
 
 /**
+ * Electric's client constructs the shape URL with `new URL()`, which rejects a
+ * relative path, so resolve the proxy route against the current origin.
+ */
+const shapeUrl = new URL("/api/electric", window.location.origin).toString();
+
+/**
+ * Electric parses PostgreSQL `int8` (BIGINT) into a `BigInt`, but our epoch
+ * timestamps are safely within `Number` range and the UI/type expects numbers.
+ */
+const shapeParser = { int8: (value: string) => Number(value) };
+
+/**
  * Live view of `user_settings`. Electric syncs rows through the dashboard's
  * authorizing proxy, and TanStack DB persists writes by returning the
  * PostgreSQL txid so the optimistic row is reconciled with the sync stream.
@@ -42,7 +54,7 @@ async function persist(changes: Partial<UserSettings>) {
 export const settingsCollection = createCollection(
   electricCollectionOptions<UserSettings>({
     id: "user_settings",
-    shapeOptions: { url: "/api/electric" },
+    shapeOptions: { url: shapeUrl, parser: shapeParser },
     getKey: (row) => row.user_id,
     onInsert: async ({ transaction }) =>
       persist(transaction.mutations[0]?.modified ?? {}),
