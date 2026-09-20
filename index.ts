@@ -20,6 +20,7 @@ import {
   createSession,
   getSession,
   getTask,
+  initializeStore,
   updateSessionOpenCodeId,
   updateTask,
 } from "./store";
@@ -148,6 +149,7 @@ client.on(Events.Error, (error) => {
   console.error("Discord client error:", error);
 });
 
+await initializeStore();
 await client.login(token);
 
 async function routeMessage(message: Message): Promise<void> {
@@ -157,7 +159,7 @@ async function routeMessage(message: Message): Promise<void> {
   const prompt = stripBotMention(message.content, client.user.id);
 
   if (message.channel.isThread()) {
-    const session = getSession(message.channel.id);
+    const session = await getSession(message.channel.id);
     if (!session) {
       if (botWasMentioned) {
         await message.reply(
@@ -170,7 +172,7 @@ async function routeMessage(message: Message): Promise<void> {
     if (!prompt) return;
 
     if (prompt.toLowerCase() === "reset") {
-      updateSessionOpenCodeId(message.channel.id, null);
+      await updateSessionOpenCodeId(message.channel.id, null);
       await message.reply(
         "Session reset. Your next prompt will start a fresh OpenCode session in the same sandbox.",
       );
@@ -188,7 +190,7 @@ async function routeMessage(message: Message): Promise<void> {
 
   if (!botWasMentioned) return;
 
-  const task = getTask(message.channel.id);
+  const task = await getTask(message.channel.id);
   if (!task || task.status === "archived") {
     await message.reply(
       "This channel isn't an active task channel. Use `/task` to create one.",
@@ -205,8 +207,8 @@ async function routeMessage(message: Message): Promise<void> {
 
   if (prompt.toLowerCase() === "reset") {
     await destroySandbox(message.channel.id, task.sandboxId ?? undefined);
-    clearSessionsForChannel(message.channel.id);
-    const resetTask = updateTask(message.channel.id, {
+    await clearSessionsForChannel(message.channel.id);
+    const resetTask = await updateTask(message.channel.id, {
       sandboxId: null,
       status: "provisioning",
     });
@@ -220,14 +222,14 @@ async function routeMessage(message: Message): Promise<void> {
   const thread = await message.startThread({
     name: createThreadName(prompt),
   });
-  createSession({
+  await createSession({
     threadId: thread.id,
     channelId: message.channel.id,
     openCodeSessionId: null,
     createdBy: message.author.id,
     createdAt: Date.now(),
   });
-  const taskWithSession = getTask(message.channel.id);
+  const taskWithSession = await getTask(message.channel.id);
   if (taskWithSession) {
     await updateStatusMessage(client, taskWithSession);
   }
@@ -265,7 +267,7 @@ async function runThreadPrompt(options: {
     );
 
     await runExclusive(channelId, async () => {
-      const task = getTask(channelId);
+      const task = await getTask(channelId);
       if (!task || task.status === "archived") {
         await statusMessage?.edit(
           "This channel is no longer an active task channel.",
@@ -279,7 +281,7 @@ async function runThreadPrompt(options: {
         configHash,
         githubToken,
         onRebuild: async () => {
-          clearSessionsForChannel(channelId);
+          await clearSessionsForChannel(channelId);
           const parent = await client.channels.fetch(channelId).catch((error) => {
             console.error("Could not fetch sandbox rebuild channel:", error);
             return undefined;
@@ -293,7 +295,7 @@ async function runThreadPrompt(options: {
                 console.error("Could not send sandbox rebuild notice:", error);
               });
           }
-          const rebuiltTask = getTask(channelId);
+          const rebuiltTask = await getTask(channelId);
           if (rebuiltTask) {
             await updateStatusMessage(client, rebuiltTask);
           }
@@ -304,7 +306,7 @@ async function runThreadPrompt(options: {
         sandbox.id !== task.sandboxId ||
         task.configHash !== configHash
       ) {
-        const readyTask = updateTask(channelId, {
+        const readyTask = await updateTask(channelId, {
           sandboxId: sandbox.id,
           configHash,
           status: "ready",
@@ -312,17 +314,17 @@ async function runThreadPrompt(options: {
         if (readyTask) await updateStatusMessage(client, readyTask);
       }
 
-      let session = getSession(thread.id);
+      let session = await getSession(thread.id);
       if (rebuilt || !session) {
-        createSession({
+        await createSession({
           threadId: thread.id,
           channelId,
           openCodeSessionId: null,
           createdBy,
           createdAt: Date.now(),
         });
-        session = getSession(thread.id);
-        const taskWithSession = getTask(channelId);
+        session = await getSession(thread.id);
+        const taskWithSession = await getTask(channelId);
         if (taskWithSession) {
           await updateStatusMessage(client, taskWithSession);
         }
@@ -352,7 +354,7 @@ async function runThreadPrompt(options: {
       });
 
       if (response.sessionId !== storedSessionId) {
-        updateSessionOpenCodeId(thread.id, response.sessionId ?? null);
+        await updateSessionOpenCodeId(thread.id, response.sessionId ?? null);
       }
       await statusMessage?.edit(truncateForDiscord(response.text));
     });
