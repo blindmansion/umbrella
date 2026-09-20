@@ -168,8 +168,16 @@ action's confidence both clear `INTENT_CONFIDENCE_THRESHOLD` (default `0.6`);
 Mentions bypass the gate, and low-confidence messages are left alone. Without
 `TYPESAFE_API_KEY`, the bot falls back to mention-only behavior.
 
+Replies to the bot count as directed at it, so answering a question the bot
+asked continues the session without a mention. When the bot does respond, any
+messages it stayed silent on since its last reply are forwarded with the prompt,
+and a bare `@umbrella` means "respond to what I just said".
+
 `TYPESAFE_MODEL` selects the model and defaults to `jev-latest`. Classifier
-failures are logged and ignored; the mention-only fallback still applies.
+failures are logged and ignored; the mention-only fallback still applies. Every
+decision is logged as `Intent for message <id>: ... -> <action|silent>` with the
+scores, which is the place to look when the bot responds or stays quiet
+unexpectedly.
 
 ## Phoenix tracing
 

@@ -34,6 +34,7 @@ describe("buildIntentState", () => {
     expect(state.bot_mentioned).toBe(false);
     expect(state.active_task).toBe(true);
     expect(state.existing_session).toBe(false);
+    expect(state.bot_spoke_last).toBe(true);
     expect(state.surface).toContain("task channel");
     expect(state.conversation).toEqual([
       { speaker: "alice", message: "should we use postgres here?" },
@@ -43,6 +44,21 @@ describe("buildIntentState", () => {
       speaker: "alice",
       message: "start on the failing login test",
     });
+  });
+
+  test("reports when a human spoke last or nobody has spoken", () => {
+    expect(
+      buildIntentState(
+        context({
+          recentTurns: [
+            { author: "alice", content: "lunch?", isBot: false },
+          ],
+        }),
+      ).bot_spoke_last,
+    ).toBe(false);
+    expect(buildIntentState(context({ recentTurns: [] })).bot_spoke_last).toBe(
+      false,
+    );
   });
 
   test("describes threads and untracked channels", () => {
