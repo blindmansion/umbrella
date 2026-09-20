@@ -36,6 +36,20 @@ export function parseGitHubUrl(value: string): GitHubReference | undefined {
   };
 }
 
+export function findGitHubReference(
+  content: string,
+): GitHubReference | undefined {
+  const matches = content.match(
+    /https:\/\/github\.com\/[^\s<>()]+?\/(?:issues|pull)\/[1-9]\d*/gi,
+  );
+  if (!matches) return undefined;
+  for (const match of matches) {
+    const reference = parseGitHubUrl(match);
+    if (reference) return reference;
+  }
+  return undefined;
+}
+
 export async function fetchGitHubMetadata(
   reference: GitHubReference,
   githubToken?: string,

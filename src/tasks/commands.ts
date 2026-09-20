@@ -4,6 +4,7 @@ import {
   type ChatInputCommandInteraction,
   type Client,
   type Guild,
+  type TextChannel,
 } from "discord.js";
 import type { SandboxNetworkIsolation } from "railway";
 import {
@@ -25,6 +26,7 @@ import {
   fetchGitHubMetadata,
   inferBranch,
   parseGitHubUrl,
+  type GitHubReference,
 } from "./github";
 import { createChannelName, slugify } from "./naming";
 
@@ -136,13 +138,51 @@ async function createTaskChannel(
   const kind =
     requestedKind ?? (reference.urlKind === "pull" ? "review" : "feature");
   const explicitBranch = interaction.options.getString("branch")?.trim();
+
+  try {
+    const { channel, provisioningError } = await createTaskChannelFromReference({
+      guild: interaction.guild,
+      actorTag: interaction.user.tag,
+      reference,
+      kind,
+      explicitBranch,
+      context,
+    });
+    if (provisioningError) {
+      await interaction.editReply(
+        `Task channel created at ${channel}, but sandbox provisioning failed: ${provisioningError}`,
+      );
+      return;
+    }
+    await interaction.editReply(`Task ready: ${channel}`);
+  } catch (error) {
+    await interaction.editReply(
+      `Could not create the task: ${sanitizeError(error, context)}`,
+    );
+  }
+}
+
+export type TaskProvisionResult = {
+  channel: TextChannel;
+  task: TaskRecord;
+  provisioningError?: string;
+};
+
+export async function createTaskChannelFromReference(options: {
+  guild: Guild;
+  actorTag: string;
+  reference: GitHubReference;
+  kind: TaskKind;
+  explicitBranch?: string;
+  context: TaskCommandContext;
+}): Promise<TaskProvisionResult> {
+  const { guild, actorTag, reference, kind, explicitBranch, context } = options;
   const metadata = await fetchGitHubMetadata(reference, context.githubToken);
 
   if (kind === "review" && !metadata.headRef && !explicitBranch) {
-    await interaction.editReply(
-      "I couldn't fetch this pull request's head branch. Re-run `/task` with the `branch` option.",
+    throw new Error(
+      "I couldn't fetch this pull request's head branch. Provide an explicit branch.",
     );
-    return;
   }
 
   const title =
@@ -158,87 +198,81 @@ async function createTaskChannel(
   });
   const repo = `${reference.owner}/${reference.name}`;
 
+  const category = await findOrCreateRepoCategory(
+    guild,
+    reference.owner,
+    reference.name,
+  );
+  const channel = await guild.channels.create({
+    name: createChannelName(kind, reference.number, slug),
+    type: ChannelType.GuildText,
+    parent: category.id,
+    reason: `Task created by ${actorTag}`,
+  });
+
+  const task: TaskRecord = {
+    channelId: channel.id,
+    kind,
+    repo,
+    refNumber: reference.number,
+    branch,
+    sandboxId: null,
+    status: "provisioning",
+    configHash: null,
+    statusMessageId: null,
+    createdAt: Date.now(),
+  };
+  await createTask(task);
+
+  const statusMessage = await channel.send(await renderTaskStatus(task));
+  await statusMessage.pin("Task status").catch((error) => {
+    console.warn(
+      `Could not pin task status in channel ${channel.id}:`,
+      sanitizeError(error),
+    );
+  });
+  const taskWithMessage =
+    (await updateTask(channel.id, {
+      statusMessageId: statusMessage.id,
+    })) ?? task;
+
+  let provisioningError: string | undefined;
   try {
-    const category = await findOrCreateRepoCategory(
-      interaction.guild,
-      reference.owner,
-      reference.name,
-    );
-    const channel = await interaction.guild.channels.create({
-      name: createChannelName(kind, reference.number, slug),
-      type: ChannelType.GuildText,
-      parent: category.id,
-      reason: `Task created by ${interaction.user.tag}`,
-    });
-
-    const task: TaskRecord = {
-      channelId: channel.id,
-      kind,
-      repo,
-      refNumber: reference.number,
-      branch,
-      sandboxId: null,
-      status: "provisioning",
-      configHash: null,
-      statusMessageId: null,
-      createdAt: Date.now(),
-    };
-    await createTask(task);
-
-    const statusMessage = await channel.send(await renderTaskStatus(task));
-    await statusMessage.pin("Task status").catch((error) => {
-      console.warn(
-        `Could not pin task status in channel ${channel.id}:`,
-        sanitizeError(error),
-      );
-    });
-    const taskWithMessage =
-      (await updateTask(channel.id, {
-        statusMessageId: statusMessage.id,
-      })) ?? task;
-
-    try {
-      await runExclusive(channel.id, async () => {
-        const { sandbox } = await getOrCreateSandbox({
-          task: taskWithMessage,
-          sandboxEnv: context.sandboxEnv,
-          configHash: context.configHash,
-          githubToken: context.githubToken,
-          tracing: context.tracing,
-          networkIsolation: context.networkIsolation,
-        });
-        const readyTask = await updateTask(channel.id, {
-          sandboxId: sandbox.id,
-          configHash: context.configHash,
-          status: "ready",
-        });
-        if (readyTask) await updateStatusMessage(context.client, readyTask);
+    await runExclusive(channel.id, async () => {
+      const { sandbox } = await getOrCreateSandbox({
+        task: taskWithMessage,
+        sandboxEnv: context.sandboxEnv,
+        configHash: context.configHash,
+        githubToken: context.githubToken,
+        tracing: context.tracing,
+        networkIsolation: context.networkIsolation,
       });
-      await interaction.editReply(`Task ready: ${channel}`);
-    } catch (error) {
-      const detail = sanitizeError(error, context);
-      const currentTask = await getTask(channel.id);
-      if (currentTask) {
-        await statusMessage
-          .edit(
-            `${await renderTaskStatus(currentTask)}\n**Provisioning error:** ${detail}`,
-          )
-          .catch((editError) => {
-            console.warn(
-              `Could not show provisioning failure in channel ${channel.id}:`,
-              sanitizeError(editError),
-            );
-          });
-      }
-      await interaction.editReply(
-        `Task channel created at ${channel}, but sandbox provisioning failed: ${detail}`,
-      );
-    }
+      const readyTask = await updateTask(channel.id, {
+        sandboxId: sandbox.id,
+        configHash: context.configHash,
+        status: "ready",
+      });
+      if (readyTask) await updateStatusMessage(context.client, readyTask);
+    });
   } catch (error) {
-    await interaction.editReply(
-      `Could not create the task: ${sanitizeError(error, context)}`,
-    );
+    provisioningError = sanitizeError(error, context);
+    const currentTask = await getTask(channel.id);
+    if (currentTask) {
+      await statusMessage
+        .edit(
+          `${await renderTaskStatus(currentTask)}\n**Provisioning error:** ${provisioningError}`,
+        )
+        .catch((editError) => {
+          console.warn(
+            `Could not show provisioning failure in channel ${channel.id}:`,
+            sanitizeError(editError),
+          );
+        });
+    }
   }
+
+  const finalTask = (await getTask(channel.id)) ?? taskWithMessage;
+  return { channel, task: finalTask, provisioningError };
 }
 
 async function closeTaskChannel(
@@ -258,32 +292,7 @@ async function closeTaskChannel(
 
   await interaction.deferReply();
   try {
-    await destroySandbox(task.channelId, task.sandboxId ?? undefined);
-    await clearSessionsForChannel(task.channelId);
-    const archivedTask = await updateTask(task.channelId, {
-      status: "archived",
-      sandboxId: null,
-    });
-    if (archivedTask) await updateStatusMessage(client, archivedTask);
-
-    const channel = interaction.channel;
-    if (channel?.type === ChannelType.GuildText) {
-      const activeThreads = await channel.threads.fetchActive().catch((error) => {
-        console.warn(
-          `Could not fetch active threads for channel ${task.channelId}:`,
-          sanitizeError(error),
-        );
-        return undefined;
-      });
-      if (activeThreads) {
-        await Promise.allSettled(
-          activeThreads.threads.map((thread) =>
-            thread.setArchived(true, "Task closed"),
-          ),
-        );
-      }
-    }
-
+    await closeTaskWorkflow({ client, channelId: task.channelId });
     await interaction.editReply(
       "Task archived and its sandbox destroyed. Channel history has been preserved.",
     );
@@ -291,6 +300,49 @@ async function closeTaskChannel(
     await interaction.editReply(
       `Could not close the task: ${sanitizeError(error)}`,
     );
+  }
+}
+
+export async function closeTaskWorkflow(options: {
+  client: Client;
+  channelId: string;
+}): Promise<void> {
+  const { client, channelId } = options;
+  const task = await getTask(channelId);
+  if (!task) {
+    throw new Error("No task is associated with this channel.");
+  }
+
+  await destroySandbox(channelId, task.sandboxId ?? undefined);
+  await clearSessionsForChannel(channelId);
+  const archivedTask = await updateTask(channelId, {
+    status: "archived",
+    sandboxId: null,
+  });
+  if (archivedTask) await updateStatusMessage(client, archivedTask);
+
+  const channel = await client.channels.fetch(channelId).catch((error) => {
+    console.warn(
+      `Could not fetch task channel ${channelId} while closing:`,
+      sanitizeError(error),
+    );
+    return undefined;
+  });
+  if (channel?.type === ChannelType.GuildText) {
+    const activeThreads = await channel.threads.fetchActive().catch((error) => {
+      console.warn(
+        `Could not fetch active threads for channel ${channelId}:`,
+        sanitizeError(error),
+      );
+      return undefined;
+    });
+    if (activeThreads) {
+      await Promise.allSettled(
+        activeThreads.threads.map((thread) =>
+          thread.setArchived(true, "Task closed"),
+        ),
+      );
+    }
   }
 }
 

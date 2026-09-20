@@ -8,6 +8,13 @@ import {
   type Message,
 } from "discord.js";
 import { loadConfig } from "../config";
+import {
+  classifyMessage,
+  resolveIntentAction,
+  type ConversationTurn,
+  type IntentAction,
+  type IntentSurface,
+} from "../intent/classifier";
 import { runOpenCode } from "../opencode/runner";
 import {
   destroySandbox,
@@ -24,10 +31,13 @@ import {
   updateTask,
 } from "../store";
 import {
+  closeTaskWorkflow,
+  createTaskChannelFromReference,
   handleTaskInteraction,
   registerTaskCommands,
   updateStatusMessage,
 } from "../tasks/commands";
+import { findGitHubReference, type GitHubReference } from "../tasks/github";
 import { splitForDiscord } from "./output";
 
 const {
@@ -38,6 +48,7 @@ const {
   githubToken,
   tracing: phoenixTracing,
   networkIsolation,
+  intent,
 } = loadConfig();
 
 const client = new Client({
@@ -47,6 +58,15 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
+
+const taskContext = {
+  client,
+  sandboxEnv,
+  configHash,
+  githubToken,
+  tracing: phoenixTracing,
+  networkIsolation,
+};
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Discord bot logged in as ${readyClient.user.tag}`);
@@ -83,6 +103,15 @@ client.once(Events.ClientReady, async (readyClient) => {
       "OpenCode tracing disabled. Set PHOENIX_ENDPOINT to a Phoenix URL reachable from Railway sandboxes to enable it.",
     );
   }
+  if (intent) {
+    console.log(
+      `Intent classification enabled via TypeSafe ${intent.model} (confidence threshold=${intent.confidenceThreshold}).`,
+    );
+  } else {
+    console.log(
+      "Intent classification disabled. Set TYPESAFE_API_KEY to let the bot infer intent without mentions.",
+    );
+  }
 });
 
 const inFlightThreads = new Set<string>();
@@ -98,14 +127,7 @@ client.on(Events.GuildCreate, (guild) => {
 
 client.on(Events.InteractionCreate, (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  void handleTaskInteraction(interaction, {
-    client,
-    sandboxEnv,
-    configHash,
-    githubToken,
-    tracing: phoenixTracing,
-    networkIsolation,
-  }).catch(async (error) => {
+  void handleTaskInteraction(interaction, taskContext).catch(async (error) => {
     console.error("Could not handle Discord command:", error);
     const response = {
       content: "The command failed unexpectedly. Check the bot logs for details.",
@@ -139,56 +161,107 @@ async function routeMessage(message: Message): Promise<void> {
   const prompt = stripBotMention(message.content, client.user.id);
 
   if (message.channel.isThread()) {
-    const session = await getSession(message.channel.id);
-    if (!session) {
-      if (botWasMentioned) {
-        await message.reply(
-          "This thread isn't a bot session. Mention me in the parent channel to start one.",
-        );
-      }
-      return;
-    }
+    await routeThreadMessage(message, { botWasMentioned, prompt });
+    return;
+  }
 
-    if (!prompt) return;
+  await routeChannelMessage(message, { botWasMentioned, prompt });
+}
 
-    if (prompt.toLowerCase() === "reset") {
-      await updateSessionOpenCodeId(message.channel.id, null);
+async function routeThreadMessage(
+  message: Message,
+  options: { botWasMentioned: boolean; prompt: string },
+): Promise<void> {
+  const { botWasMentioned, prompt } = options;
+  const thread = message.channel;
+  if (!thread.isThread()) return;
+
+  const session = await getSession(thread.id);
+  if (!session) {
+    if (botWasMentioned) {
       await message.reply(
-        "Session reset. Your next prompt will start a fresh OpenCode session in the same sandbox.",
+        "This thread isn't a bot session. Mention me in the parent channel to start one.",
       );
-      return;
     }
+    return;
+  }
 
-    await runThreadPrompt({
-      thread: message.channel,
-      channelId: session.channelId,
-      prompt,
-      createdBy: session.createdBy ?? message.author.id,
+  const action = await classifyAction(message, {
+    surface: "thread",
+    taskActive: true,
+    hasSession: true,
+    botMentioned: botWasMentioned,
+  });
+  if (!action) return;
+
+  if (action === "reset") {
+    await updateSessionOpenCodeId(thread.id, null);
+    await message.reply(
+      "Session reset. Your next prompt will start a fresh OpenCode session in the same sandbox.",
+    );
+    return;
+  }
+
+  if (action !== "chat") return;
+
+  if (!prompt) {
+    if (botWasMentioned) {
+      await message.reply(
+        "Mention me with a prompt, for example: `@umbrella investigate the failing test`.",
+      );
+    }
+    return;
+  }
+
+  await runThreadPrompt({
+    thread,
+    channelId: session.channelId,
+    prompt,
+    createdBy: session.createdBy ?? message.author.id,
+  });
+}
+
+async function routeChannelMessage(
+  message: Message,
+  options: { botWasMentioned: boolean; prompt: string },
+): Promise<void> {
+  const { botWasMentioned, prompt } = options;
+  const channelId = message.channel.id;
+  const task = await getTask(channelId);
+  const taskActive = Boolean(task && task.status !== "archived");
+  const reference = findGitHubReference(prompt || message.content);
+
+  const action = await classifyAction(message, {
+    surface: taskActive ? "task_channel" : "other",
+    taskActive,
+    hasSession: false,
+    botMentioned: botWasMentioned,
+  });
+
+  if (!taskActive || !task) {
+    await routeUntrackedChannel(message, {
+      action,
+      reference,
+      botWasMentioned,
     });
     return;
   }
 
-  if (!botWasMentioned) return;
-
-  const task = await getTask(message.channel.id);
-  if (!task || task.status === "archived") {
-    await message.reply(
-      "This channel isn't an active task channel. Use `/task` to create one.",
-    );
+  if (action === "close") {
+    await message.reply("Closing this task and destroying its sandbox...");
+    await closeTaskWorkflow({ client, channelId });
     return;
   }
 
-  if (!prompt) {
-    await message.reply(
-      "Mention me with a prompt, for example: `@umbrella investigate the failing test`.",
-    );
+  if (action === "create_task" && reference) {
+    await createTaskFromMessage(message, reference);
     return;
   }
 
-  if (prompt.toLowerCase() === "reset") {
-    await destroySandbox(message.channel.id, task.sandboxId ?? undefined);
-    await clearSessionsForChannel(message.channel.id);
-    const resetTask = await updateTask(message.channel.id, {
+  if (action === "reset") {
+    await destroySandbox(channelId, task.sandboxId ?? undefined);
+    await clearSessionsForChannel(channelId);
+    const resetTask = await updateTask(channelId, {
       sandboxId: null,
       status: "provisioning",
     });
@@ -199,27 +272,175 @@ async function routeMessage(message: Message): Promise<void> {
     return;
   }
 
+  if (action !== "chat") return;
+
+  if (!prompt) {
+    await message.reply(
+      "Mention me with a prompt, for example: `@umbrella investigate the failing test`.",
+    );
+    return;
+  }
+
   const thread = await message.startThread({
     name: createThreadName(prompt),
   });
   await createSession({
     threadId: thread.id,
-    channelId: message.channel.id,
+    channelId,
     openCodeSessionId: null,
     createdBy: message.author.id,
     createdAt: Date.now(),
   });
-  const taskWithSession = await getTask(message.channel.id);
+  const taskWithSession = await getTask(channelId);
   if (taskWithSession) {
     await updateStatusMessage(client, taskWithSession);
   }
 
   await runThreadPrompt({
     thread,
-    channelId: message.channel.id,
+    channelId,
     prompt,
     createdBy: message.author.id,
   });
+}
+
+async function routeUntrackedChannel(
+  message: Message,
+  options: {
+    action: IntentAction | undefined;
+    reference: GitHubReference | undefined;
+    botWasMentioned: boolean;
+  },
+): Promise<void> {
+  const { action, reference, botWasMentioned } = options;
+  if (reference && (action === "create_task" || botWasMentioned)) {
+    await createTaskFromMessage(message, reference);
+    return;
+  }
+
+  if (botWasMentioned) {
+    await message.reply(
+      "This channel isn't an active task channel. Share a GitHub issue or pull request URL and I'll set one up.",
+    );
+  }
+}
+
+async function createTaskFromMessage(
+  message: Message,
+  reference: GitHubReference,
+): Promise<void> {
+  const guild = message.guild;
+  if (!guild) return;
+
+  const notice = await message
+    .reply(
+      `Setting up a task for ${reference.owner}/${reference.name}#${reference.number}...`,
+    )
+    .catch((error) => {
+      console.error("Could not acknowledge task creation:", error);
+      return undefined;
+    });
+
+  try {
+    const { channel, provisioningError } = await createTaskChannelFromReference({
+      guild,
+      actorTag: message.author.tag,
+      reference,
+      kind: reference.urlKind === "pull" ? "review" : "feature",
+      context: taskContext,
+    });
+    const summary = provisioningError
+      ? `Task channel created at ${channel}, but sandbox provisioning failed: ${provisioningError}`
+      : `Task ready: ${channel}`;
+    if (notice) {
+      await notice.edit(summary);
+    } else if ("send" in message.channel) {
+      await message.channel.send(summary).catch(() => undefined);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (notice) {
+      await notice.edit(`Could not create the task: ${detail}`);
+    }
+  }
+}
+
+async function classifyAction(
+  message: Message,
+  options: {
+    surface: IntentSurface;
+    taskActive: boolean;
+    hasSession: boolean;
+    botMentioned: boolean;
+  },
+): Promise<IntentAction | undefined> {
+  if (!message.content.trim()) {
+    return options.botMentioned ? "chat" : undefined;
+  }
+  if (!intent) {
+    return options.botMentioned ? "chat" : undefined;
+  }
+
+  const context = await buildIntentContext(message, options);
+  const classification = await classifyMessage(context, {
+    apiKey: intent.apiKey,
+    model: intent.model,
+  });
+  return resolveIntentAction({
+    classification,
+    botMentioned: options.botMentioned,
+    threshold: intent.confidenceThreshold,
+  });
+}
+
+async function buildIntentContext(
+  message: Message,
+  options: {
+    surface: IntentSurface;
+    taskActive: boolean;
+    hasSession: boolean;
+    botMentioned: boolean;
+  },
+): Promise<Parameters<typeof classifyMessage>[0]> {
+  const recentTurns = await fetchRecentTurns(message);
+  return {
+    surface: options.surface,
+    botMentioned: options.botMentioned,
+    taskActive: options.taskActive,
+    hasSession: options.hasSession,
+    recentTurns,
+    latest: {
+      author: message.author.username,
+      content: stripBotMention(message.content, client.user?.id ?? ""),
+      isBot: false,
+    },
+  };
+}
+
+async function fetchRecentTurns(message: Message): Promise<ConversationTurn[]> {
+  const channel = message.channel;
+  if (!("messages" in channel)) return [];
+
+  try {
+    const fetched = await channel.messages.fetch({
+      limit: 10,
+      before: message.id,
+    });
+    return [...fetched.values()]
+      .reverse()
+      .map((entry) => ({
+        author: entry.author.username,
+        content: entry.content,
+        isBot: entry.author.bot,
+      }))
+      .filter((turn) => turn.content.trim().length > 0);
+  } catch (error) {
+    console.warn(
+      "Could not fetch recent messages for intent context:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return [];
+  }
 }
 
 async function runThreadPrompt(options: {
