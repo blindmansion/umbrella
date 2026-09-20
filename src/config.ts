@@ -2,6 +2,12 @@ import type { SandboxNetworkIsolation } from "railway";
 import { computeConfigHash } from "./sandbox/manager";
 import type { SandboxTracing } from "./tracing/phoenix";
 
+export type IntentConfig = {
+  apiKey: string;
+  model: string;
+  confidenceThreshold: number;
+};
+
 export type AppConfig = {
   token: string;
   model: string;
@@ -10,7 +16,19 @@ export type AppConfig = {
   githubToken?: string;
   tracing?: SandboxTracing;
   networkIsolation: SandboxNetworkIsolation;
+  intent?: IntentConfig;
 };
+
+const DEFAULT_INTENT_CONFIDENCE = 0.6;
+
+function parseConfidenceThreshold(value: string | undefined): number {
+  if (value === undefined || value.trim() === "") {
+    return DEFAULT_INTENT_CONFIDENCE;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_INTENT_CONFIDENCE;
+  return Math.min(1, Math.max(0, parsed));
+}
 
 export function loadConfig(): AppConfig {
   const token = Bun.env.DISCORD_BOT_TOKEN;
@@ -62,6 +80,16 @@ export function loadConfig(): AppConfig {
       ? "PRIVATE"
       : "ISOLATED";
 
+  const intent = Bun.env.TYPESAFE_API_KEY
+    ? {
+        apiKey: Bun.env.TYPESAFE_API_KEY,
+        model: Bun.env.TYPESAFE_MODEL ?? "jev-latest",
+        confidenceThreshold: parseConfidenceThreshold(
+          Bun.env.INTENT_CONFIDENCE_THRESHOLD,
+        ),
+      }
+    : undefined;
+
   return {
     token,
     model,
@@ -73,5 +101,6 @@ export function loadConfig(): AppConfig {
     githubToken,
     tracing,
     networkIsolation,
+    intent,
   };
 }

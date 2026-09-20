@@ -59,11 +59,13 @@ railway variable set \
   RAILWAY_API_TOKEN=... \
   GITHUB_TOKEN=... \
   ANTHROPIC_API_KEY=... \
+  TYPESAFE_API_KEY=... \
   --service umbrella
 ```
 
 `FIREWORKS_API_KEY` can replace `ANTHROPIC_API_KEY`. Optional variables are
-`OPENCODE_MODEL`, `GIT_AUTHOR_NAME`, and `GIT_AUTHOR_EMAIL`.
+`OPENCODE_MODEL`, `TYPESAFE_MODEL`, `INTENT_CONFIDENCE_THRESHOLD`,
+`GIT_AUTHOR_NAME`, and `GIT_AUTHOR_EMAIL`.
 
 Enable Phoenix authentication with generated secrets:
 
@@ -117,19 +119,41 @@ Ship changes by merging to `main`; Railway rebuilds and replaces the bot.
 
 ## Discord usage
 
-Use `/task url:<github-issue-or-pr-url>` to create a task channel and provision
-its sandbox. Issue URLs default to feature work and pull request URLs default
-to review work. Use `/close` in a task channel to destroy its sandbox and
-archive active threads while preserving channel history.
+Share a GitHub issue or pull request URL in any channel and the bot creates a
+task channel, provisions its sandbox, and replies with a link. Issue URLs
+default to feature work and pull request URLs default to review work. In a task
+channel, ask the bot to work on something and it starts a thread; each thread is
+one OpenCode session. Ask to reset a thread to start a fresh session in the same
+sandbox, reset the task channel to rebuild the sandbox and invalidate all thread
+sessions, or close the task to destroy its sandbox and archive active threads
+while preserving channel history.
 
-Mention the bot in a task channel to create a thread. Each thread is one
-OpenCode session. Send `reset` in a thread to start a fresh session in the same
-sandbox, or mention the bot with `reset` in the task channel to rebuild the
-sandbox and invalidate all thread sessions.
+The `/task` and `/close` commands and `@umbrella` mentions still work as
+explicit overrides; they are no longer required. See
+[Intent classification](#intent-classification).
 
 The Discord invite needs the `bot` and `applications.commands` scopes plus View
 Channel, Send Messages, Read Message History, Create Public Threads, Send
 Messages in Threads, Manage Channels, and Manage Messages permissions.
+
+## Intent classification
+
+With `TYPESAFE_API_KEY` set, every guild message (plus the surrounding
+conversation) is classified by [TypeSafe jev](https://docs.typesafe.ai) before
+the bot decides what to do. The classifier asks two questions:
+
+- a **noul** question for whether the latest message is directed at the bot
+- a **choice** question for the intended action: `chat`, `create_task`, `reset`,
+  `close`, or `ignore`
+
+The bot acts without an explicit mention when the direction score and the
+action's confidence both clear `INTENT_CONFIDENCE_THRESHOLD` (default `0.6`);
+`reset` and `close` require a little more confidence because they destroy state.
+Mentions bypass the gate, and low-confidence messages are left alone. Without
+`TYPESAFE_API_KEY`, the bot falls back to mention-only behavior.
+
+`TYPESAFE_MODEL` selects the model and defaults to `jev-latest`. Classifier
+failures are logged and ignored; the mention-only fallback still applies.
 
 ## Phoenix tracing
 
