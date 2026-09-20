@@ -38,6 +38,14 @@ function fakeChat() {
   return { chat, sent };
 }
 
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function sandbox(): SandboxHandle {
   return {
     id: "sandbox-1",
@@ -188,6 +196,182 @@ describe("createUmbrella", () => {
           command.includes(session.worktreePath!),
       ),
     ).toBe(true);
+  });
+
+  test("runs OpenCode for different threads in the same task concurrently", async () => {
+    const store = createMemoryStore(() => 123);
+    const { chat } = fakeChat();
+    let inFlightOpenCode = 0;
+    let maxInFlightOpenCode = 0;
+    const release: Array<() => void> = [];
+    const executionSandbox: SandboxHandle = {
+      id: "sandbox-1",
+      exec(command, options) {
+        if (!command.includes("opencode run")) {
+          return Promise.resolve({
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+          }) as ExecHandle;
+        }
+        inFlightOpenCode += 1;
+        maxInFlightOpenCode = Math.max(maxInFlightOpenCode, inFlightOpenCode);
+        const stdout =
+          '{"type":"text","sessionID":"oc-1","part":{"text":"Done."}}\n';
+        options?.onStdout?.(stdout);
+        return new Promise((resolve) => {
+          release.push(() => {
+            inFlightOpenCode -= 1;
+            resolve({
+              exitCode: 0,
+              stdout,
+              stderr: "",
+              timedOut: false,
+            });
+          });
+        }) as ExecHandle;
+      },
+      async mkdir() {},
+      async writeFile() {},
+      async destroy() {},
+    };
+    const runtime = createUmbrella({
+      store,
+      chat,
+      sandboxes: {
+        async create() {
+          return executionSandbox;
+        },
+        async connect() {
+          return executionSandbox;
+        },
+      },
+      github: {
+        async fetchMetadata() {
+          return { title: "Fix the bug", defaultBranch: "main" };
+        },
+        async fetchDefaultBranch() {
+          return "main";
+        },
+        async fetchOpenIssues() {
+          return [];
+        },
+      },
+      config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+      clock: () => 123,
+    });
+
+    await runtime.onMessage(message);
+    const task = (await store.listActiveTasks())[0]!;
+    const first = runtime.onMessage({
+      ...message,
+      id: "message-2",
+      channelId: task.channelId,
+      text: "first prompt",
+    });
+    const second = runtime.onMessage({
+      ...message,
+      id: "message-3",
+      channelId: task.channelId,
+      text: "second prompt",
+    });
+
+    await waitFor(() => maxInFlightOpenCode === 2, "concurrent OpenCode runs");
+    expect(await store.listSessionsForChannel(task.channelId)).toHaveLength(2);
+
+    for (const done of release) done();
+    await Promise.all([first, second]);
+    expect(maxInFlightOpenCode).toBe(2);
+    expect(inFlightOpenCode).toBe(0);
+  });
+
+  test("rejects a second prompt in a thread that is already running", async () => {
+    const store = createMemoryStore(() => 123);
+    const { chat, sent } = fakeChat();
+    let releaseOpenCode: (() => void) | undefined;
+    const executionSandbox: SandboxHandle = {
+      id: "sandbox-1",
+      exec(command, options) {
+        if (!command.includes("opencode run")) {
+          return Promise.resolve({
+            exitCode: 0,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+          }) as ExecHandle;
+        }
+        const stdout =
+          '{"type":"text","sessionID":"oc-1","part":{"text":"Done."}}\n';
+        options?.onStdout?.(stdout);
+        return new Promise((resolve) => {
+          releaseOpenCode = () =>
+            resolve({
+              exitCode: 0,
+              stdout,
+              stderr: "",
+              timedOut: false,
+            });
+        }) as ExecHandle;
+      },
+      async mkdir() {},
+      async writeFile() {},
+      async destroy() {},
+    };
+    const runtime = createUmbrella({
+      store,
+      chat,
+      sandboxes: {
+        async create() {
+          return executionSandbox;
+        },
+        async connect() {
+          return executionSandbox;
+        },
+      },
+      github: {
+        async fetchMetadata() {
+          return { title: "Fix the bug", defaultBranch: "main" };
+        },
+        async fetchDefaultBranch() {
+          return "main";
+        },
+        async fetchOpenIssues() {
+          return [];
+        },
+      },
+      config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+      clock: () => 123,
+    });
+
+    await runtime.onMessage(message);
+    const task = (await store.listActiveTasks())[0]!;
+    const first = runtime.onMessage({
+      ...message,
+      id: "message-2",
+      channelId: task.channelId,
+      text: "first prompt",
+    });
+    await waitFor(
+      () => releaseOpenCode !== undefined,
+      "first OpenCode run to start",
+    );
+    const session = (await store.listSessionsForChannel(task.channelId))[0]!;
+    await runtime.onMessage({
+      ...message,
+      id: "message-3",
+      channelId: task.channelId,
+      threadId: session.threadId,
+      text: "second prompt",
+    });
+    expect(
+      sent.some(({ text }) =>
+        text.includes("I'm still working on the previous prompt in this thread."),
+      ),
+    ).toBe(true);
+
+    releaseOpenCode?.();
+    await first;
   });
 
   test("keeps instance state and stores isolated", async () => {

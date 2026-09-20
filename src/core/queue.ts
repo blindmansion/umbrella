@@ -1,3 +1,4 @@
+/** Serializes sandbox create/rebuild and worktree setup per task channel. */
 export class ChannelQueue {
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly depths = new Map<string, number>();
