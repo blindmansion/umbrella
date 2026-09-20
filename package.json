@@ -4,9 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
-    "dev": "docker compose up -d postgres phoenix && bun --watch index.ts",
-    "prod": "docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build",
-    "down": "docker compose -f docker-compose.yml -f docker-compose.prod.yml down",
+    "dev": "bun --watch index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "railway:plan": "railway config plan",

@@ -101,14 +101,19 @@ After setup, every merge to `main` triggers a new Umbrella build and replaces
 the running bot when the deployment is healthy. Changes outside
 `Dockerfile.phoenix` do not rebuild Phoenix.
 
-## Local development
+## Development
 
-`bun run dev` starts the bundled Postgres and an auth-less Phoenix with
-`docker-compose.yml`, then runs the bot on the host. Point `DATABASE_URL` at the
-compose Postgres (`postgres://umbrella:umbrella@localhost:5432/umbrella`) and
-set `PHOENIX_ENDPOINT` to a URL the sandboxes can reach. From a developer
-machine that usually means a tunnel to Phoenix, since sandboxes run on Railway.
+Development runs against the Railway project rather than a local stack. Link the
+project and run the bot with `railway run` so `DATABASE_URL`,
+`PHOENIX_ENDPOINT`, and the other service variables are injected from the
+deployed environment:
 
+```bash
+railway link
+railway run bun run dev
+```
+
+Ship changes by merging to `main`; Railway rebuilds and replaces the bot.
 
 ## Discord usage
 
@@ -136,23 +141,11 @@ survive sandbox rebuilds.
 
 ### Phoenix and the bot
 
-`docker-compose.yml` runs the latest Phoenix with a persistent volume and
-authentication disabled, alongside a Postgres for the bot. `docker-compose.prod.yml`
-extends it, turning authentication on and adding the bot service:
-
-```bash
-# Development Postgres + Phoenix, then the bot on the host
-bun run dev
-
-# Phoenix with auth plus the containerized bot
-PHOENIX_SECRET=change-me-32-chars-min-1-digit-1-lower \
-PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=strong-admin-password \
-bun run prod
-```
-
-After the first authenticated boot, log in as `admin@localhost`, set a new
-password, and create a system API key under **Settings → API Keys**. Set
-`PHOENIX_API_KEY` to that key so sandboxes authenticate their exports.
+Railway runs Phoenix with authentication enabled and its own managed Postgres,
+as defined in `.railway/railway.ts`. After the first boot, log in as
+`admin@localhost` on the Phoenix domain, set a new password, and create a system
+API key under **Settings → API Keys**. Set `PHOENIX_API_KEY` to that key so
+sandboxes authenticate their exports.
 
 ### Connecting sandboxes to Phoenix
 
