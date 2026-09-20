@@ -21,6 +21,8 @@ export type SessionRecord = {
   channelId: string;
   openCodeSessionId: string | null;
   model: string | null;
+  worktreePath: string | null;
+  branch: string | null;
   createdBy: string | null;
   createdAt: number;
 };
@@ -66,6 +68,10 @@ export interface StateStore {
   updateSessionModel(
     threadId: string,
     model: string | null,
+  ): Promise<SessionRecord | undefined>;
+  updateSessionWorktree(
+    threadId: string,
+    workspace: { path: string; branch: string },
   ): Promise<SessionRecord | undefined>;
   listSessionsForChannel(channelId: string): Promise<SessionRecord[]>;
   clearSessionsForChannel(channelId: string): Promise<void>;

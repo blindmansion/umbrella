@@ -3,6 +3,7 @@ import type {
   GitHubReference,
   TaskKind,
 } from "./ports";
+import type { SessionWorkspace } from "./worktrees";
 
 const MAX_CONTEXT_LENGTH = 4_000;
 
@@ -54,15 +55,27 @@ export function buildRepoContext(options: {
   return lines.join("\n");
 }
 
+export function buildWorkspaceContext(workspace: SessionWorkspace): string {
+  return [
+    "Session workspace (created automatically for this thread):",
+    `- Directory: ${workspace.path}`,
+    `- Branch: ${workspace.branch}`,
+    "- Do your work here; other threads use separate worktrees of the same repository.",
+  ].join("\n");
+}
+
 export function buildFirstPrompt(
   context: string | null | undefined,
   prompt: string,
+  workspace?: SessionWorkspace,
 ): string {
-  const prefix = context?.trim();
-  const body = prompt.trim();
-  if (!prefix) return prompt;
-  if (!body) return prefix;
-  return `${prefix}\n\n---\n\n${body}`;
+  const sections = [
+    context?.trim(),
+    workspace ? buildWorkspaceContext(workspace) : undefined,
+    prompt.trim(),
+  ].filter((section): section is string => Boolean(section));
+  if (sections.length === 0) return prompt;
+  return sections.join("\n\n---\n\n");
 }
 
 function truncate(value: string, limit: number): string {

@@ -46,6 +46,8 @@ function session(
     channelId,
     openCodeSessionId: null,
     model: null,
+    worktreePath: null,
+    branch: null,
     createdBy: "user-1",
     createdAt: 1_700_000_000_001,
     ...overrides,
@@ -143,6 +145,27 @@ describe("state store", () => {
 
     await store.clearSessionsForChannel(parent.channelId);
     expect(await store.listSessionsForChannel(parent.channelId)).toEqual([]);
+    await store.close();
+  });
+
+  test("stores a session's worktree path and branch", async () => {
+    const store = await createTestStore();
+    const parent = task("channel-worktree");
+    const child = session("thread-worktree", parent.channelId);
+
+    await store.createTask(parent);
+    await store.createSession(child);
+    const updated = await store.updateSessionWorktree(child.threadId, {
+      path: "/root/worktrees/thread-worktree",
+      branch: "feat/42-fix-it-thread-worktree",
+    });
+
+    expect(updated).toEqual({
+      ...child,
+      worktreePath: "/root/worktrees/thread-worktree",
+      branch: "feat/42-fix-it-thread-worktree",
+    });
+    expect(await store.getSession(child.threadId)).toEqual(updated!);
     await store.close();
   });
 

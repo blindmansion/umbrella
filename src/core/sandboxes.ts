@@ -3,10 +3,17 @@ import type {
   CoreConfig,
   SandboxHandle,
   SandboxProvider,
+  SessionRecord,
   TaskRecord,
 } from "./ports";
 import { configureSandboxTracing } from "./tracing";
 import { sanitizeError, sanitizeText, shellQuote } from "./utils";
+import {
+  buildWorktreeCommand,
+  type SessionWorkspace,
+  worktreeBranchFor,
+  worktreePathFor,
+} from "./worktrees";
 
 type ModelCacheEntry = { models: string[]; fetchedAt: number };
 
@@ -80,6 +87,25 @@ export class SandboxManager {
     if (cached) return cached;
     if (!sandboxId) return undefined;
     return this.connect(channelId, sandboxId);
+  }
+
+  async ensureWorktree(options: {
+    sandbox: SandboxHandle;
+    task: TaskRecord;
+    threadId: string;
+    session?: Pick<SessionRecord, "worktreePath" | "branch"> | undefined;
+  }): Promise<SessionWorkspace> {
+    const { sandbox, task, threadId, session } = options;
+    const path = session?.worktreePath ?? worktreePathFor(threadId);
+    const branch = session?.branch ?? worktreeBranchFor(task.branch, threadId);
+    await this.runRequired(
+      sandbox,
+      buildWorktreeCommand({ path, branch, startPoint: task.branch }),
+      `create a worktree for thread ${threadId}`,
+      300,
+      "/root/workspace",
+    );
+    return { path, branch };
   }
 
   async destroy(channelId: string, sandboxId?: string | null): Promise<void> {

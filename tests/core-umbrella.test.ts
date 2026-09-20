@@ -115,6 +115,81 @@ describe("createUmbrella", () => {
     expect(sent.some(({ text }) => text.includes("Task ready"))).toBe(true);
   });
 
+  test("creates a per-thread worktree and localizes the session cwd", async () => {
+    const store = createMemoryStore(() => 123);
+    const { chat } = fakeChat();
+    const calls: { command: string; cwd?: string }[] = [];
+    const executionSandbox: SandboxHandle = {
+      id: "sandbox-1",
+      exec(command, options) {
+        calls.push({ command, cwd: options?.cwd });
+        const stdout = command.includes("opencode run")
+          ? '{"type":"text","sessionID":"oc-1","part":{"text":"Done."}}\n'
+          : "";
+        options?.onStdout?.(stdout);
+        return Promise.resolve({
+          exitCode: 0,
+          stdout,
+          stderr: "",
+          timedOut: false,
+        }) as ExecHandle;
+      },
+      async mkdir() {},
+      async writeFile() {},
+      async destroy() {},
+    };
+    const runtime = createUmbrella({
+      store,
+      chat,
+      sandboxes: {
+        async create() {
+          return executionSandbox;
+        },
+        async connect() {
+          return executionSandbox;
+        },
+      },
+      github: {
+        async fetchMetadata() {
+          return { title: "Fix the bug", defaultBranch: "main" };
+        },
+        async fetchDefaultBranch() {
+          return "main";
+        },
+        async fetchOpenIssues() {
+          return [];
+        },
+      },
+      config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+      clock: () => 123,
+    });
+
+    await runtime.onMessage(message);
+    const task = (await store.listActiveTasks())[0]!;
+    await runtime.onMessage({
+      ...message,
+      id: "message-2",
+      channelId: task.channelId,
+      text: "add a test for this",
+    });
+
+    const sessions = await store.listSessionsForChannel(task.channelId);
+    expect(sessions).toHaveLength(1);
+    const session = sessions[0]!;
+    expect(session.worktreePath).toBe(`/root/worktrees/${session.threadId}`);
+    expect(session.branch).toBe(`feat/42-fix-the-bug-${session.threadId}`);
+    expect(
+      calls.some(({ command }) => command.includes("git worktree add -b")),
+    ).toBe(true);
+    expect(
+      calls.some(
+        ({ command }) =>
+          command.includes("opencode run") &&
+          command.includes(session.worktreePath!),
+      ),
+    ).toBe(true);
+  });
+
   test("keeps instance state and stores isolated", async () => {
     const firstStore = createMemoryStore();
     const secondStore = createMemoryStore();

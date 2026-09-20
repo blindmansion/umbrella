@@ -103,6 +103,95 @@ describe("SandboxManager", () => {
     expect(result.rebuilt).toBe(true);
   });
 
+  test("creates a per-thread worktree in the shared clone", async () => {
+    const calls: { command: string; cwd?: string }[] = [];
+    const sandbox: SandboxHandle = {
+      id: "sandbox-worktree",
+      exec(command, options) {
+        calls.push({ command, cwd: options?.cwd });
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+        }) as ExecHandle;
+      },
+      async mkdir() {},
+      async writeFile() {},
+      async destroy() {},
+    };
+    const manager = new SandboxManager(
+      {
+        async connect() {
+          throw new Error("unused");
+        },
+        async create() {
+          return sandbox;
+        },
+      },
+      { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+    );
+
+    const workspace = await manager.ensureWorktree({
+      sandbox,
+      task: task({ branch: "feat/42-fix-it" }),
+      threadId: "thread-1",
+    });
+
+    expect(workspace).toEqual({
+      path: "/root/worktrees/thread-1",
+      branch: "feat/42-fix-it-thread-1",
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cwd).toBe("/root/workspace");
+    expect(calls[0]?.command).toContain("git worktree add -b");
+    expect(calls[0]?.command).toContain("'/root/worktrees/thread-1'");
+  });
+
+  test("reuses a session's recorded worktree", async () => {
+    const calls: string[] = [];
+    const sandbox: SandboxHandle = {
+      id: "sandbox-worktree",
+      exec(command) {
+        calls.push(command);
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+        }) as ExecHandle;
+      },
+      async mkdir() {},
+      async writeFile() {},
+      async destroy() {},
+    };
+    const manager = new SandboxManager(
+      {
+        async connect() {
+          throw new Error("unused");
+        },
+        async create() {
+          return sandbox;
+        },
+      },
+      { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+    );
+
+    const workspace = await manager.ensureWorktree({
+      sandbox,
+      task: task({ branch: "feat/42-fix-it" }),
+      threadId: "thread-1",
+      session: { worktreePath: "/root/worktrees/custom", branch: "custom-branch" },
+    });
+
+    expect(workspace).toEqual({
+      path: "/root/worktrees/custom",
+      branch: "custom-branch",
+    });
+    expect(calls[0]).toContain("'/root/worktrees/custom'");
+    expect(calls[0]).toContain("'custom-branch'");
+  });
+
   test("destroys a half-built sandbox and redacts bootstrap errors", async () => {
     const broken = handle("broken", { failClone: true });
     const provider: SandboxProvider = {

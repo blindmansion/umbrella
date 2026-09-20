@@ -62,6 +62,17 @@ export function createMemoryStore(clock: () => number = Date.now): StateStore {
       sessions.set(id, next);
       return { ...next };
     },
+    async updateSessionWorktree(id, workspace) {
+      const value = sessions.get(id);
+      if (!value) return undefined;
+      const next = {
+        ...value,
+        worktreePath: workspace.path,
+        branch: workspace.branch,
+      };
+      sessions.set(id, next);
+      return { ...next };
+    },
     async listSessionsForChannel(channelId) {
       return [...sessions.values()]
         .filter((session) => session.channelId === channelId)

@@ -18,9 +18,11 @@ export async function runOpenCode(options: {
   model: string;
   prompt: string;
   sessionId?: string;
+  cwd?: string;
   onProgress: (event: ProgressEvent) => void | Promise<void>;
 }): Promise<{ text: string; sessionId?: string }> {
-  const { sandbox, model, prompt, sessionId, onProgress } = options;
+  const { sandbox, model, prompt, sessionId, cwd = "/root/workspace", onProgress } =
+    options;
   const textParts: string[] = [];
   const stderrParts: string[] = [];
   const promptPath = `/tmp/opencode-prompt-${randomUUID()}.txt`;
@@ -38,13 +40,13 @@ export async function runOpenCode(options: {
       );
   };
 
-  await sandbox.mkdir("/root/workspace");
+  await sandbox.mkdir(cwd);
   await sandbox.writeFile(promptPath, prompt);
   const handle = sandbox.exec(
     [
       "bash -lc",
       shellQuote(
-        `cd /root/workspace && prompt="$(cat ${shellQuote(promptPath)})" && rm -f ${shellQuote(promptPath)} && exec opencode run --auto --format json --model ${shellQuote(model)}${sessionFlag} -- "$prompt"`,
+        `cd ${shellQuote(cwd)} && prompt="$(cat ${shellQuote(promptPath)})" && rm -f ${shellQuote(promptPath)} && exec opencode run --auto --format json --model ${shellQuote(model)}${sessionFlag} -- "$prompt"`,
       ),
     ].join(" "),
     {

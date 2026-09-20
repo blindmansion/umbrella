@@ -3,6 +3,7 @@ import {
   buildFirstPrompt,
   buildReferenceContext,
   buildRepoContext,
+  buildWorkspaceContext,
 } from "../src/core/context";
 import type { GitHubReference } from "../src/core/ports";
 
@@ -103,5 +104,40 @@ describe("buildFirstPrompt", () => {
 
   test("falls back to the context when the prompt is empty", () => {
     expect(buildFirstPrompt("context", "  ")).toBe("context");
+  });
+
+  test("includes the session workspace between context and prompt", () => {
+    const workspace = {
+      path: "/root/worktrees/thread-1",
+      branch: "feat/42-fix-it-thread-1",
+    };
+    const result = buildFirstPrompt("context", "do the thing", workspace);
+
+    expect(result).toBe(
+      "context\n\n---\n\nSession workspace (created automatically for this thread):\n- Directory: /root/worktrees/thread-1\n- Branch: feat/42-fix-it-thread-1\n- Do your work here; other threads use separate worktrees of the same repository.\n\n---\n\ndo the thing",
+    );
+  });
+
+  test("includes the session workspace even without task context", () => {
+    const result = buildFirstPrompt(null, "do the thing", {
+      path: "/root/worktrees/thread-1",
+      branch: "main-thread-1",
+    });
+
+    expect(result).toContain("Session workspace");
+    expect(result).toContain("/root/worktrees/thread-1");
+    expect(result.startsWith("Session workspace")).toBe(true);
+    expect(result.endsWith("do the thing")).toBe(true);
+  });
+});
+
+describe("buildWorkspaceContext", () => {
+  test("names the directory and branch", () => {
+    const context = buildWorkspaceContext({
+      path: "/root/worktrees/thread-2",
+      branch: "feat/9-thing-thread-2",
+    });
+    expect(context).toContain("Directory: /root/worktrees/thread-2");
+    expect(context).toContain("Branch: feat/9-thing-thread-2");
   });
 });

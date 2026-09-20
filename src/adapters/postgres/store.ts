@@ -37,6 +37,8 @@ type SessionRow = {
   channel_id: string;
   opencode_session_id: string | null;
   model: string | null;
+  worktree_path: string | null;
+  branch: string | null;
   created_by: string | null;
   created_at: number;
 };
@@ -79,6 +81,8 @@ export async function createStore(options: {
       channel_id TEXT NOT NULL REFERENCES tasks(channel_id) ON DELETE CASCADE,
       opencode_session_id TEXT NULL,
       model TEXT NULL,
+      worktree_path TEXT NULL,
+      branch TEXT NULL,
       created_by TEXT NULL,
       created_at BIGINT NOT NULL
     );
@@ -92,6 +96,8 @@ export async function createStore(options: {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS model TEXT NULL;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context TEXT NULL;
     ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model TEXT NULL;
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS worktree_path TEXT NULL;
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS branch TEXT NULL;
   `);
 
   return {
@@ -177,13 +183,16 @@ export async function createStore(options: {
     async createSession(session) {
       await database.query(
         `INSERT INTO sessions (
-          thread_id, channel_id, opencode_session_id, model, created_by, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
+          thread_id, channel_id, opencode_session_id, model, worktree_path,
+          branch, created_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           session.threadId,
           session.channelId,
           session.openCodeSessionId,
           session.model,
+          session.worktreePath,
+          session.branch,
           session.createdBy,
           session.createdAt,
         ],
@@ -216,6 +225,17 @@ export async function createStore(options: {
          WHERE thread_id = $2
          RETURNING *`,
         [model, threadId],
+      );
+      return rows[0] ? sessionFromRow(rows[0]) : undefined;
+    },
+
+    async updateSessionWorktree(threadId, workspace) {
+      const { rows } = await database.query<SessionRow>(
+        `UPDATE sessions
+         SET worktree_path = $1, branch = $2
+         WHERE thread_id = $3
+         RETURNING *`,
+        [workspace.path, workspace.branch, threadId],
       );
       return rows[0] ? sessionFromRow(rows[0]) : undefined;
     },
@@ -283,6 +303,8 @@ function sessionFromRow(row: SessionRow): SessionRecord {
     channelId: row.channel_id,
     openCodeSessionId: row.opencode_session_id,
     model: row.model,
+    worktreePath: row.worktree_path,
+    branch: row.branch,
     createdBy: row.created_by,
     createdAt: Number(row.created_at),
   };

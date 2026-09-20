@@ -89,6 +89,8 @@ export async function runThreadPrompt(options: {
           channelId,
           openCodeSessionId: null,
           model: null,
+          worktreePath: null,
+          branch: null,
           createdBy,
           createdAt: (deps.clock ?? Date.now)(),
         });
@@ -96,11 +98,27 @@ export async function runThreadPrompt(options: {
         const withSession = await deps.store.getTask(channelId);
         if (withSession) await updateStatusMessage(deps, withSession);
       }
+      const workspace = await manager.ensureWorktree({
+        sandbox,
+        task,
+        threadId,
+        session,
+      });
+      if (
+        session?.worktreePath !== workspace.path ||
+        session?.branch !== workspace.branch
+      ) {
+        await deps.store.updateSessionWorktree(threadId, workspace);
+      }
       const storedSessionId = session?.openCodeSessionId ?? undefined;
       const model = session?.model ?? task.model ?? deps.config.model;
       const sessionPrompt =
-        storedSessionId === undefined && includeContext
-          ? buildFirstPrompt(task.context, prompt)
+        storedSessionId === undefined
+          ? buildFirstPrompt(
+              includeContext ? task.context : null,
+              prompt,
+              workspace,
+            )
           : prompt;
       let step = 0;
       const response = await runOpenCode({
@@ -108,6 +126,7 @@ export async function runThreadPrompt(options: {
         model,
         prompt: sessionPrompt,
         sessionId: storedSessionId,
+        cwd: workspace.path,
         onProgress: async (event) => {
           if (event.type === "step_start") {
             step += 1;
