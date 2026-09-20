@@ -93,3 +93,64 @@ scopes plus View Channel, Send Messages, Read Message History, Create Public
 Threads, Send Messages in Threads, Manage Channels, and Manage Messages
 permissions.
 
+## Phoenix tracing
+
+Every task channel exports its OpenCode sessions to its own project in a
+self-hosted [Arize Phoenix](https://github.com/Arize-ai/phoenix) instance. The
+project name is derived from the repository and reference (for example
+`umbrella-blindmansion-umbrella-5`), so a channel's traces stay isolated and
+survive sandbox rebuilds.
+
+### Development
+
+`docker-compose.yml` runs an auth-less Phoenix and persists its data in a
+volume. `bun run dev` starts it idempotently and then runs the bot locally:
+
+```bash
+bun run dev
+```
+
+Phoenix is reachable at [http://localhost:6006](http://localhost:6006). Because
+Railway sandboxes are remote, expose the local collector through a tunnel
+(`cloudflared tunnel --url http://localhost:6006`, `ngrok http 6006`, ...) and
+point the bot at it:
+
+```env
+PHOENIX_SANDBOX_ENDPOINT=https://your-tunnel.example
+```
+
+Without `PHOENIX_SANDBOX_ENDPOINT` the bot logs that tracing is disabled and
+runs sessions untraced, so development without Phoenix still works.
+
+### Production
+
+`docker-compose.prod.yml` extends the base compose: it enables Phoenix
+authentication, adds the containerized bot, and reaches Phoenix over the compose
+network.
+
+```bash
+PHOENIX_SECRET=change-me-32-chars-min-1-digit-1-lower \
+PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=strong-admin-password \
+bun run prod
+```
+
+After the first boot, log in as `admin@localhost`, set a new password, and
+create a system API key under **Settings → API Keys**. Set `PHOENIX_API_KEY` to
+that key so sandboxes authenticate their exports.
+
+When the bot and Phoenix are deployed into the same Railway environment, set
+`SANDBOX_NETWORK_ISOLATION=PRIVATE` and
+`PHOENIX_SANDBOX_ENDPOINT=http://phoenix.railway.internal:6006`. The sandboxes
+join the environment's private network and export traces without any public
+ingress.
+
+### How it works
+
+On sandbox creation the bot installs the
+[Arize OpenCode tracing harness](https://github.com/Arize-ai/coding-harness-tracing/tree/main/tracing/opencode)
+non-interactively and writes `ARIZE_PROJECT_NAME` for the task channel. OpenCode
+loads the harness plugin and exports OpenInference spans directly to Phoenix.
+Tracing is best-effort: a failed install logs a warning and the session
+continues untraced.
+
+

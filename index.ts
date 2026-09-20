@@ -23,6 +23,7 @@ import {
   updateSessionOpenCodeId,
   updateTask,
 } from "./store";
+import type { SandboxTracing } from "./tracing";
 import {
   handleTaskInteraction,
   registerTaskCommands,
@@ -54,7 +55,22 @@ const model =
   (providerEnv.FIREWORKS_API_KEY
     ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
-const configHash = computeConfigHash(model, providerEnv);
+
+// Sandboxes only emit traces when we know where Phoenix lives. In production
+// that is usually a private Railway address (`http://phoenix.railway.internal:6006`);
+// in development, run `bun run dev` and point PHOENIX_SANDBOX_ENDPOINT at a
+// tunnel to the local Phoenix container.
+const phoenixEndpoint =
+  Bun.env.PHOENIX_SANDBOX_ENDPOINT ?? Bun.env.PHOENIX_ENDPOINT;
+const phoenixTracing: SandboxTracing | undefined = phoenixEndpoint
+  ? { endpoint: phoenixEndpoint, apiKey: Bun.env.PHOENIX_API_KEY }
+  : undefined;
+const networkIsolation =
+  Bun.env.SANDBOX_NETWORK_ISOLATION === "PRIVATE" ? "PRIVATE" : "ISOLATED";
+const configHash = computeConfigHash(model, providerEnv, {
+  tracing: phoenixTracing,
+  networkIsolation,
+});
 
 const client = new Client({
   intents: [
@@ -90,6 +106,15 @@ client.once(Events.ClientReady, async (readyClient) => {
       ],
     })}`,
   );
+  if (phoenixTracing) {
+    console.log(
+      `OpenCode tracing enabled: sandboxes will export to ${phoenixTracing.endpoint} (networkIsolation=${networkIsolation}).`,
+    );
+  } else {
+    console.log(
+      "OpenCode tracing disabled. Set PHOENIX_SANDBOX_ENDPOINT (or PHOENIX_ENDPOINT) to a Phoenix URL reachable from Railway sandboxes to enable it.",
+    );
+  }
 });
 
 const inFlightThreads = new Set<string>();
@@ -110,6 +135,8 @@ client.on(Events.InteractionCreate, (interaction) => {
     providerEnv,
     configHash,
     githubToken,
+    tracing: phoenixTracing,
+    networkIsolation,
   }).catch(async (error) => {
     console.error("Could not handle Discord command:", error);
     const response = {
@@ -264,6 +291,8 @@ async function runThreadPrompt(options: {
         providerEnv,
         configHash,
         githubToken,
+        tracing: phoenixTracing,
+        networkIsolation,
         onRebuild: async () => {
           clearSessionsForChannel(channelId);
           const parent = await client.channels.fetch(channelId).catch((error) => {

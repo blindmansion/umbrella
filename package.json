@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "start": "bun run index.ts",
-    "dev": "bun --watch index.ts"
+    "dev": "docker compose up -d phoenix && bun --watch index.ts",
+    "prod": "docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build",
+    "down": "docker compose -f docker-compose.yml -f docker-compose.prod.yml down"
   },
   "devDependencies": {
     "@types/bun": "latest"

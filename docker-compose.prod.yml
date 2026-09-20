@@ -1,0 +1,37 @@
+# Production overlay. Always combined with the base compose so the bot service
+# and the hardened Phoenix settings extend the development definitions:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+#
+# or simply `bun run prod`.
+services:
+  phoenix:
+    environment:
+      # Phoenix requires authentication in production. PHOENIX_SECRET signs the
+      # JWTs and PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD seeds the admin account
+      # on first boot (email `admin@localhost`).
+      PHOENIX_ENABLE_AUTH: "true"
+      PHOENIX_SECRET: "${PHOENIX_SECRET:?PHOENIX_SECRET must be set for the production compose}"
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: "${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:?PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD must be set for the production compose}"
+      PHOENIX_USE_SECURE_COOKIES: "true"
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # The sandboxes are remote, so point PHOENIX_SANDBOX_ENDPOINT at a URL they
+      # can reach: a public domain, or `http://phoenix.railway.internal:6006`
+      # when the bot and Phoenix share a Railway environment (also set
+      # SANDBOX_NETWORK_ISOLATION=PRIVATE).
+      PHOENIX_SANDBOX_ENDPOINT: "${PHOENIX_SANDBOX_ENDPOINT:-}"
+    depends_on:
+      - phoenix
+    volumes:
+      - bot-data:/app/data
+
+volumes:
+  bot-data:

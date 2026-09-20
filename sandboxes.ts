@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { Sandbox } from "railway";
+import { Sandbox, type SandboxNetworkIsolation } from "railway";
 import { shellQuote } from "./opencode";
 import type { TaskRecord } from "./store";
+import { configureSandboxTracing, type SandboxTracing } from "./tracing";
 
 const liveSandboxes = new Map<string, Sandbox>();
 const channelQueues = new Map<string, Promise<unknown>>();
@@ -10,9 +11,10 @@ const channelQueueDepths = new Map<string, number>();
 export function computeConfigHash(
   model: string,
   providerEnv: Record<string, string>,
+  extra: Record<string, unknown> = {},
 ): string {
   return createHash("sha256")
-    .update(JSON.stringify({ model, providerEnv }))
+    .update(JSON.stringify({ model, providerEnv, ...extra }))
     .digest("hex");
 }
 
@@ -52,6 +54,8 @@ export async function getOrCreateSandbox(options: {
   providerEnv: Record<string, string>;
   configHash: string;
   githubToken?: string;
+  tracing?: SandboxTracing;
+  networkIsolation?: SandboxNetworkIsolation;
   onRebuild?: () => void | Promise<void>;
 }): Promise<{ sandbox: Sandbox; rebuilt: boolean }> {
   const {
@@ -59,6 +63,8 @@ export async function getOrCreateSandbox(options: {
     providerEnv,
     configHash,
     githubToken,
+    tracing,
+    networkIsolation,
     onRebuild,
   } = options;
   const cached = liveSandboxes.get(task.channelId);
@@ -129,10 +135,11 @@ export async function getOrCreateSandbox(options: {
   const sandbox = await Sandbox.create({
     idleTimeoutMinutes: 60,
     env: providerEnv,
+    networkIsolation,
   });
 
   try {
-    await bootstrapSandbox(sandbox, task, githubToken);
+    await bootstrapSandbox(sandbox, task, githubToken, tracing);
   } catch (error) {
     await sandbox.destroy().catch(() => undefined);
     throw error;
@@ -147,6 +154,7 @@ export async function bootstrapSandbox(
   sandbox: Sandbox,
   task: TaskRecord,
   githubToken?: string,
+  tracing?: SandboxTracing,
 ): Promise<void> {
   const encodedToken = githubToken
     ? encodeURIComponent(githubToken)
@@ -197,9 +205,11 @@ export async function bootstrapSandbox(
       );
       return undefined;
     });
-  if (!installResult) return;
 
-  if (installResult.timedOut || installResult.exitCode !== 0) {
+  if (
+    installResult &&
+    (installResult.timedOut || installResult.exitCode !== 0)
+  ) {
     const detail = sanitizeText(
       installResult.stderr.trim() ||
         installResult.stdout.trim() ||
@@ -209,6 +219,23 @@ export async function bootstrapSandbox(
       githubToken,
     );
     console.warn(`Dependency install failed (continuing): ${detail}`);
+  }
+
+  if (tracing) {
+    try {
+      const projectName = await configureSandboxTracing({
+        sandbox,
+        task,
+        tracing,
+      });
+      console.log(
+        `Tracing channel ${task.channelId} into Phoenix project ${projectName}`,
+      );
+    } catch (error) {
+      console.warn(
+        `Could not configure OpenCode tracing (continuing): ${sanitizeError(error, githubToken)}`,
+      );
+    }
   }
 }
 
