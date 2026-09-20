@@ -30,6 +30,7 @@ function task(
     status: "provisioning",
     configHash: null,
     statusMessageId: null,
+    model: null,
     createdAt: 1_700_000_000_000,
     ...overrides,
   };
@@ -44,6 +45,7 @@ function session(
     threadId,
     channelId,
     openCodeSessionId: null,
+    model: null,
     createdBy: "user-1",
     createdAt: 1_700_000_000_001,
     ...overrides,
@@ -107,8 +109,19 @@ describe("state store", () => {
       ...first,
       openCodeSessionId: "opencode-session-1",
     });
+    expect(
+      await store.updateSessionModel(first.threadId, "anthropic/claude-sonnet-4-6"),
+    ).toEqual({
+      ...first,
+      openCodeSessionId: "opencode-session-1",
+      model: "anthropic/claude-sonnet-4-6",
+    });
     expect(await store.listSessionsForChannel(parent.channelId)).toEqual([
-      { ...first, openCodeSessionId: "opencode-session-1" },
+      {
+        ...first,
+        openCodeSessionId: "opencode-session-1",
+        model: "anthropic/claude-sonnet-4-6",
+      },
       second,
     ]);
 

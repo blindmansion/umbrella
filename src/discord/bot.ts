@@ -38,6 +38,7 @@ import {
   closeTaskWorkflow,
   createTaskChannelForRepo,
   createTaskChannelFromReference,
+  handleModelAutocomplete,
   handleTaskInteraction,
   registerTaskCommands,
   updateStatusMessage,
@@ -131,6 +132,15 @@ client.on(Events.GuildCreate, (guild) => {
 });
 
 client.on(Events.InteractionCreate, (interaction) => {
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === "model") {
+      void handleModelAutocomplete(interaction, taskContext).catch((error) => {
+        console.error("Could not handle model autocomplete:", error);
+        void interaction.respond([]).catch(() => undefined);
+      });
+    }
+    return;
+  }
   if (!interaction.isChatInputCommand()) return;
   void handleTaskInteraction(interaction, taskContext).catch(async (error) => {
     console.error("Could not handle Discord command:", error);
@@ -308,6 +318,7 @@ async function routeChannelMessage(
     threadId: thread.id,
     channelId,
     openCodeSessionId: null,
+    model: null,
     createdBy: message.author.id,
     createdAt: Date.now(),
   });
@@ -467,6 +478,7 @@ async function startTaskPrompt(
     threadId: thread.id,
     channelId: channel.id,
     openCodeSessionId: null,
+    model: null,
     createdBy,
     createdAt: Date.now(),
   });
@@ -663,6 +675,7 @@ async function runThreadPrompt(options: {
           threadId: thread.id,
           channelId,
           openCodeSessionId: null,
+          model: null,
           createdBy,
           createdAt: Date.now(),
         });
@@ -674,10 +687,11 @@ async function runThreadPrompt(options: {
       }
 
       const storedSessionId = session?.openCodeSessionId ?? undefined;
+      const sessionModel = session?.model ?? task.model ?? model;
       let step = 0;
       const response = await runOpenCode({
         sandbox,
-        model,
+        model: sessionModel,
         prompt,
         sessionId: storedSessionId,
         onProgress: async (event) => {
