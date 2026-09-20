@@ -45,15 +45,15 @@ export type IntentQuestions = {
 };
 
 const ACTION_CRITERIA: Record<IntentAction, string> = {
-  chat: "Start or continue work on a coding task: a prompt, question, or instruction for the bot to act on in a session.",
+  chat: "Start or continue a conversation with the bot inside an existing task (`active_task` is true) or as a reply to it: a prompt, question, or instruction for it to act on, or a reply to it such as an answer to its question, requested details, a correction, or feedback on its last message.",
   create_task:
-    "Set up a new task workspace so the bot can start work. This includes sharing a GitHub issue or pull request URL, or asking the bot to take on a coding task, question, or request in the server's configured repository without a URL.",
+    "Set up a new task workspace so the bot can start work. This includes sharing a GitHub issue or pull request URL, or, when `active_task` is false, asking the bot to take on a coding task, question, or request in the server's configured repository without a URL.",
   reset:
     "Reset, restart, or rebuild the current session or sandbox so the bot starts over.",
   close:
     "Close, archive, or tear down the current task and its sandbox.",
   ignore:
-    "Not directed at the bot: humans talking to each other, reactions, or chatter that asks the bot to do nothing.",
+    "Not meant for the bot: humans talking to each other, reactions, or a message telling the bot to wait or do nothing.",
 };
 
 export function buildIntentQuestions(): IntentQuestions {
@@ -61,10 +61,10 @@ export function buildIntentQuestions(): IntentQuestions {
     directed_at_bot: {
       type: "noul",
       instructions:
-        "Is the latest message addressed to the bot or clearly requesting that the bot take an action? People talking to each other about the project, or statements that ask the bot to do nothing, are not directed at the bot.",
+        "Does the author of `latest_message` expect the bot to respond to it? Use `conversation` and `bot_spoke_last` to judge who the message is for. No explicit mention is needed.",
       criteria: {
-        true: "The latest message is a request or instruction for the bot, even without an explicit mention.",
-        false: "The latest message is not asking the bot to do anything.",
+        true: "The message is meant for the bot: a request, question, or instruction it can carry out that is not addressed to another person (such as asking for work on a linked GitHub issue or pull request), or a reply to the bot such as answering its question, supplying details it asked for, correcting it, or continuing the exchange with it.",
+        false: "The message is meant for another person, is chatter between humans, or tells the bot to wait or do nothing.",
       },
     },
     action: {
@@ -86,6 +86,7 @@ export function buildIntentState(context: IntentContext): Record<string, unknown
     bot_mentioned: context.botMentioned,
     active_task: context.taskActive,
     existing_session: context.hasSession,
+    bot_spoke_last: context.recentTurns.at(-1)?.isBot ?? false,
     conversation: context.recentTurns.map((turn) => ({
       speaker: turn.isBot ? "bot" : turn.author,
       message: turn.content,

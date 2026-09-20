@@ -10,6 +10,7 @@ import {
   type TextChannel,
 } from "discord.js";
 import { loadConfig } from "../config";
+import { buildPendingPrompt } from "../intent/backlog";
 import {
   classifyMessage,
   resolveIntentAction,
@@ -176,7 +177,7 @@ async function routeThreadMessage(
   message: Message,
   options: { botWasMentioned: boolean; prompt: string },
 ): Promise<void> {
-  const { botWasMentioned, prompt } = options;
+  const { botWasMentioned } = options;
   const thread = message.channel;
   if (!thread.isThread()) return;
 
@@ -190,11 +191,13 @@ async function routeThreadMessage(
     return;
   }
 
+  const recentTurns = await fetchRecentTurns(message);
   const action = await classifyAction(message, {
     surface: "thread",
     taskActive: true,
     hasSession: true,
     botMentioned: botWasMentioned,
+    recentTurns,
   });
   if (!action) return;
 
@@ -206,9 +209,13 @@ async function routeThreadMessage(
     return;
   }
 
-  if (action !== "chat") return;
+  // A session thread is already a task, so a request for new work continues it.
+  if (action !== "chat" && action !== "create_task") return;
 
-  if (!prompt) {
+  // Include messages the bot stayed silent on so OpenCode sees the whole
+  // exchange, and so a bare mention means "respond to what I just said".
+  const pendingPrompt = buildPendingPrompt(recentTurns, latestTurn(message));
+  if (!pendingPrompt) {
     if (botWasMentioned) {
       await message.reply(
         "Mention me with a prompt, for example: `@umbrella investigate the failing test`.",
@@ -220,7 +227,7 @@ async function routeThreadMessage(
   await runThreadPrompt({
     thread,
     channelId: session.channelId,
-    prompt,
+    prompt: pendingPrompt,
     createdBy: session.createdBy ?? message.author.id,
   });
 }
@@ -235,11 +242,14 @@ async function routeChannelMessage(
   const taskActive = Boolean(task && task.status !== "archived");
   const reference = findGitHubReference(prompt || message.content);
 
+  const recentTurns =
+    intent || taskActive ? await fetchRecentTurns(message) : [];
   const action = await classifyAction(message, {
     surface: taskActive ? "task_channel" : "other",
     taskActive,
     hasSession: false,
     botMentioned: botWasMentioned,
+    recentTurns,
   });
 
   if (!taskActive || !task) {
@@ -277,9 +287,14 @@ async function routeChannelMessage(
     return;
   }
 
-  if (action !== "chat") return;
+  // Without a GitHub reference there is no new task to create, so a request
+  // for work in an existing task channel starts a session here.
+  if (action !== "chat" && action !== "create_task") return;
 
-  if (!prompt) {
+  // A bare mention means "respond to what I just said".
+  const chatPrompt =
+    prompt || buildPendingPrompt(recentTurns, latestTurn(message));
+  if (!chatPrompt) {
     await message.reply(
       "Mention me with a prompt, for example: `@umbrella investigate the failing test`.",
     );
@@ -287,7 +302,7 @@ async function routeChannelMessage(
   }
 
   const thread = await message.startThread({
-    name: createThreadName(prompt),
+    name: createThreadName(chatPrompt),
   });
   await createSession({
     threadId: thread.id,
@@ -304,7 +319,7 @@ async function routeChannelMessage(
   await runThreadPrompt({
     thread,
     channelId,
-    prompt,
+    prompt: chatPrompt,
     createdBy: message.author.id,
   });
 }
@@ -473,6 +488,7 @@ async function classifyAction(
     taskActive: boolean;
     hasSession: boolean;
     botMentioned: boolean;
+    recentTurns: ConversationTurn[];
   },
 ): Promise<IntentAction | undefined> {
   if (!message.content.trim()) {
@@ -482,41 +498,60 @@ async function classifyAction(
     return options.botMentioned ? "chat" : undefined;
   }
 
-  const context = await buildIntentContext(message, options);
-  const classification = await classifyMessage(context, {
-    apiKey: intent.apiKey,
-    model: intent.model,
-  });
-  return resolveIntentAction({
+  const classification = await classifyMessage(
+    {
+      surface: options.surface,
+      botMentioned: options.botMentioned,
+      taskActive: options.taskActive,
+      hasSession: options.hasSession,
+      recentTurns: options.recentTurns,
+      latest: latestTurn(message),
+    },
+    {
+      apiKey: intent.apiKey,
+      model: intent.model,
+    },
+  );
+  const action = resolveIntentAction({
     classification,
     botMentioned: options.botMentioned,
     threshold: intent.confidenceThreshold,
   });
+  console.log(
+    `Intent for message ${message.id}: surface=${options.surface} mentioned=${options.botMentioned} turns=${options.recentTurns.length} directed=${classification?.directedAtBot.toFixed(2) ?? "n/a"} action=${classification?.action ?? "n/a"} confidence=${classification?.confidence.toFixed(2) ?? "n/a"} -> ${action ?? "silent"}`,
+  );
+  return action;
 }
 
-async function buildIntentContext(
-  message: Message,
-  options: {
-    surface: IntentSurface;
-    taskActive: boolean;
-    hasSession: boolean;
-    botMentioned: boolean;
-  },
-): Promise<Parameters<typeof classifyMessage>[0]> {
-  const recentTurns = await fetchRecentTurns(message);
+function latestTurn(message: Message): ConversationTurn {
   return {
-    surface: options.surface,
-    botMentioned: options.botMentioned,
-    taskActive: options.taskActive,
-    hasSession: options.hasSession,
-    recentTurns,
-    latest: {
-      author: message.author.username,
-      content: stripBotMention(message.content, client.user?.id ?? ""),
-      isBot: false,
-    },
+    author: message.author.username,
+    content: readableContent(message),
+    isBot: false,
   };
 }
+
+function toTurn(message: Message): ConversationTurn {
+  return {
+    author: message.author.username,
+    content: readableContent(message),
+    isBot: message.author.bot,
+  };
+}
+
+/** Drop the bot's own mention and render other user mentions as @username. */
+function readableContent(message: Message): string {
+  let content = stripBotMention(message.content, client.user?.id ?? "");
+  for (const [id, user] of message.mentions.users) {
+    content = content.replace(
+      new RegExp(`<@!?${id}>`, "g"),
+      `@${user.username}`,
+    );
+  }
+  return content;
+}
+
+const RECENT_TURN_LIMIT = 10;
 
 async function fetchRecentTurns(message: Message): Promise<ConversationTurn[]> {
   const channel = message.channel;
@@ -524,16 +559,20 @@ async function fetchRecentTurns(message: Message): Promise<ConversationTurn[]> {
 
   try {
     const fetched = await channel.messages.fetch({
-      limit: 10,
+      limit: RECENT_TURN_LIMIT,
       before: message.id,
     });
-    return [...fetched.values()]
-      .reverse()
-      .map((entry) => ({
-        author: entry.author.username,
-        content: entry.content,
-        isBot: entry.author.bot,
-      }))
+    const messages = [...fetched.values()].reverse();
+
+    // A thread's history does not include the message it was started from, so
+    // the request that opened the session would otherwise be missing.
+    if (channel.isThread() && fetched.size < RECENT_TURN_LIMIT) {
+      const starter = await channel.fetchStarterMessage().catch(() => null);
+      if (starter && starter.id !== message.id) messages.unshift(starter);
+    }
+
+    return messages
+      .map(toTurn)
       .filter((turn) => turn.content.trim().length > 0);
   } catch (error) {
     console.warn(
