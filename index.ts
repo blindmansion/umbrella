@@ -4,13 +4,29 @@ import {
   GatewayIntentBits,
   OAuth2Scopes,
   PermissionFlagsBits,
+  type AnyThreadChannel,
+  type Message,
 } from "discord.js";
-import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
-import { Sandbox } from "railway";
+import { runOpenCode, type ProgressEvent } from "./opencode";
+import {
+  computeConfigHash,
+  destroySandbox,
+  getOrCreateSandbox,
+  queueDepth,
+  runExclusive,
+} from "./sandboxes";
+import {
+  clearSessionsForChannel,
+  createSession,
+  getSession,
+  getTask,
+  updateSessionOpenCodeId,
+  updateTask,
+} from "./store";
 
 const token = Bun.env.DISCORD_BOT_TOKEN;
 const providerEnv: Record<string, string> = {};
+const githubToken = Bun.env.GITHUB_TOKEN;
 
 if (Bun.env.ANTHROPIC_API_KEY) {
   providerEnv.ANTHROPIC_API_KEY = Bun.env.ANTHROPIC_API_KEY;
@@ -33,34 +49,14 @@ const model =
   (providerEnv.FIREWORKS_API_KEY
     ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
-const sandboxConfigurationHash = createHash("sha256")
-  .update(JSON.stringify({ model, providerEnv }))
-  .digest("hex");
-const dataDirectory = `${process.cwd()}/data`;
-const sessionStatePath = `${dataDirectory}/session.json`;
-
-type SessionState = {
-  sandboxId: string;
-  openCodeSessionId?: string;
-  configurationHash?: string;
-};
-
-type ProgressEvent =
-  | { type: "step_start" }
-  | {
-      type: "tool_use";
-      tool: string;
-      status: string;
-      title?: string;
-      input?: Record<string, unknown>;
-    }
-  | { type: "error" };
-
-let sessionState = await loadSessionState();
-let activeSandbox: Sandbox | undefined;
+const configHash = computeConfigHash(model, providerEnv);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.once(Events.ClientReady, (readyClient) => {
@@ -72,75 +68,19 @@ client.once(Events.ClientReady, (readyClient) => {
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
         PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.CreatePublicThreads,
+        PermissionFlagsBits.SendMessagesInThreads,
       ],
     })}`,
   );
 });
 
-let busy = false;
+const inFlightThreads = new Set<string>();
 
-client.on(Events.MessageCreate, async (message) => {
-  if (
-    message.author.bot ||
-    !client.user ||
-    !message.mentions.users.has(client.user.id)
-  ) {
-    return;
-  }
-
-  const prompt = message.content
-    .replace(new RegExp(`<@!?${client.user.id}>`, "g"), "")
-    .trim();
-
-  if (!prompt) {
-    await message.reply("Mention me with a prompt, for example: `@umbrella say hi`");
-    return;
-  }
-
-  if (busy) {
-    await message.reply("I'm already working on a prompt. Try again shortly.");
-    return;
-  }
-
-  busy = true;
-  const isReset = prompt.toLowerCase() === "reset";
-  const reply = await message.reply(
-    isReset ? "Resetting the OpenCode session..." : "Working in OpenCode...",
-  );
-
-  try {
-    if (isReset) {
-      await resetSession();
-      await reply.edit("Session reset. Your next prompt will start a new one.");
-      return;
-    }
-
-    let step = 0;
-    const response = await runOpenCode(prompt, async (event) => {
-      if (event.type === "step_start") {
-        step += 1;
-        await reply.edit(
-          step === 1
-            ? "OpenCode is thinking..."
-            : `OpenCode is continuing (step ${step})...`,
-        );
-      }
-
-      if (event.type === "tool_use") {
-        await message.channel.send(formatToolEvent(event));
-      }
-
-      if (event.type === "error") {
-        await message.channel.send("✗ OpenCode reported an error.");
-      }
-    });
-    await reply.edit(truncateForDiscord(response));
-  } catch (error) {
-    console.error("OpenCode run failed:", error);
-    await reply.edit("OpenCode failed to finish. Check the bot logs for details.");
-  } finally {
-    busy = false;
-  }
+client.on(Events.MessageCreate, (message) => {
+  void routeMessage(message).catch((error) => {
+    console.error("Could not route Discord message:", error);
+  });
 });
 
 client.on(Events.Error, (error) => {
@@ -149,231 +89,231 @@ client.on(Events.Error, (error) => {
 
 await client.login(token);
 
-async function runOpenCode(
-  prompt: string,
-  onProgress: (event: ProgressEvent) => Promise<void>,
-) {
-  const sandbox = await getOrCreateSandbox();
-  const textParts: string[] = [];
-  const stderrParts: string[] = [];
-  let stdoutBuffer = "";
-  let discoveredSessionId: string | undefined;
-  let progressQueue = Promise.resolve();
-  const sessionFlag = sessionState?.openCodeSessionId
-    ? ` --session ${shellQuote(sessionState.openCodeSessionId)}`
-    : "";
-  const queueProgress = (event: ProgressEvent) => {
-    progressQueue = progressQueue
-      .then(() => onProgress(event))
-      .catch((error) => console.error("Could not send progress update:", error));
-  };
+async function routeMessage(message: Message): Promise<void> {
+  if (message.author.bot || !client.user || !message.inGuild()) return;
 
-  await sandbox.files.mkdir("/root/workspace");
-  await sandbox.files.write("/tmp/opencode-prompt.txt", prompt);
+  const botWasMentioned = message.mentions.users.has(client.user.id);
+  const prompt = stripBotMention(message.content, client.user.id);
 
-  const handle = sandbox.exec(
-    [
-      "bash -lc",
-      shellQuote(
-        `cd /root/workspace && prompt="$(cat /tmp/opencode-prompt.txt)" && exec opencode run --auto --format json --model ${shellQuote(model)}${sessionFlag} -- "$prompt"`,
-      ),
-    ].join(" "),
-    {
-      timeoutSec: 900,
-      onStdout: (chunk) => {
-        stdoutBuffer += chunk;
-        const lines = stdoutBuffer.split("\n");
-        stdoutBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          discoveredSessionId =
-            collectOpenCodeEvent(line, textParts, queueProgress) ??
-            discoveredSessionId;
-        }
-      },
-      onStderr: (chunk) => stderrParts.push(chunk),
-    },
-  );
-
-  console.log(`OpenCode exec session ${await handle.sessionName}`);
-  const result = await handle;
-
-  if (stdoutBuffer.trim()) {
-    discoveredSessionId =
-      collectOpenCodeEvent(stdoutBuffer, textParts, queueProgress) ??
-      discoveredSessionId;
-  }
-  await progressQueue;
-  if (result.timedOut) throw new Error("OpenCode timed out");
-  if (result.exitCode !== 0) {
-    throw new Error(
-      stderrParts.join("").trim() ||
-        `OpenCode exited with code ${result.exitCode}`,
-    );
-  }
-
-  if (discoveredSessionId !== sessionState?.openCodeSessionId) {
-    await saveSessionState({
-      sandboxId: sandbox.id,
-      openCodeSessionId: discoveredSessionId,
-      configurationHash: sandboxConfigurationHash,
-    });
-  }
-
-  const response = textParts.join("").trim();
-  if (!response) throw new Error("OpenCode returned no text");
-  return response;
-}
-
-function collectOpenCodeEvent(
-  line: string,
-  textParts: string[],
-  onProgress: (event: ProgressEvent) => void,
-) {
-  if (!line.trim()) return undefined;
-
-  try {
-    const event = JSON.parse(line) as {
-      type?: string;
-      text?: string;
-      part?: {
-        text?: string;
-        tool?: string;
-        state?: {
-          status?: string;
-          title?: string;
-          input?: Record<string, unknown>;
-        };
-      };
-      sessionID?: string;
-    };
-    if (event.type === "text") {
-      const text = event.part?.text ?? event.text;
-      if (text) textParts.push(text);
+  if (message.channel.isThread()) {
+    const session = getSession(message.channel.id);
+    if (!session) {
+      if (botWasMentioned) {
+        await message.reply(
+          "This thread isn't a bot session. Mention me in the parent channel to start one.",
+        );
+      }
+      return;
     }
-    if (event.type === "step_start") {
-      onProgress({ type: "step_start" });
-    }
-    if (event.type === "tool_use") {
-      onProgress({
-        type: "tool_use",
-        tool: event.part?.tool ?? "tool",
-        status: event.part?.state?.status ?? "completed",
-        title: event.part?.state?.title,
-        input: event.part?.state?.input,
-      });
-    }
-    if (event.type === "error") {
-      onProgress({ type: "error" });
-    }
-    return event.sessionID;
-  } catch {
-    console.warn("Ignoring non-JSON OpenCode output:", line);
-    return undefined;
-  }
-}
 
-async function getOrCreateSandbox() {
-  if (activeSandbox) return activeSandbox;
+    if (!prompt) return;
 
-  if (
-    sessionState &&
-    sessionState.configurationHash !== sandboxConfigurationHash
-  ) {
-    console.log("Sandbox configuration changed; replacing the saved sandbox");
-    const staleSandbox = await Sandbox.connect(sessionState.sandboxId).catch(
-      () => undefined,
-    );
-    await staleSandbox?.destroy().catch((error) => {
-      console.warn(`Could not destroy stale sandbox ${sessionState?.sandboxId}:`, error);
-    });
-    await clearSessionState();
-  }
-
-  if (sessionState) {
-    try {
-      activeSandbox = await Sandbox.connect(sessionState.sandboxId);
-      console.log(`Reconnected to Railway sandbox ${activeSandbox.id}`);
-      return activeSandbox;
-    } catch (error) {
-      console.warn(
-        `Could not reconnect to sandbox ${sessionState.sandboxId}; creating a new one:`,
-        error,
+    if (prompt.toLowerCase() === "reset") {
+      updateSessionOpenCodeId(message.channel.id, null);
+      await message.reply(
+        "Session reset. Your next prompt will start a fresh OpenCode session in the same sandbox.",
       );
-      await clearSessionState();
+      return;
     }
-  }
 
-  activeSandbox = await Sandbox.create({
-    idleTimeoutMinutes: 60,
-    env: providerEnv,
-  });
-  await saveSessionState({
-    sandboxId: activeSandbox.id,
-    configurationHash: sandboxConfigurationHash,
-  });
-  console.log(`Created persistent Railway sandbox ${activeSandbox.id}`);
-  return activeSandbox;
-}
-
-async function resetSession() {
-  let sandbox = activeSandbox;
-
-  if (!sandbox && sessionState) {
-    sandbox = await Sandbox.connect(sessionState.sandboxId).catch(() => undefined);
-  }
-
-  if (sandbox) {
-    await sandbox.destroy().catch((error) => {
-      console.warn(`Could not destroy sandbox ${sandbox.id}:`, error);
+    await runThreadPrompt({
+      thread: message.channel,
+      channelId: session.channelId,
+      prompt,
+      createdBy: session.createdBy ?? message.author.id,
     });
+    return;
   }
 
-  activeSandbox = undefined;
-  await clearSessionState();
+  if (!botWasMentioned) return;
+
+  const task = getTask(message.channel.id);
+  if (!task || task.status === "archived") {
+    await message.reply(
+      "This channel isn't an active task channel. Task creation via `/task` arrives in the next phase.",
+    );
+    return;
+  }
+
+  if (!prompt) {
+    await message.reply(
+      "Mention me with a prompt, for example: `@umbrella investigate the failing test`.",
+    );
+    return;
+  }
+
+  if (prompt.toLowerCase() === "reset") {
+    await destroySandbox(message.channel.id, task.sandboxId ?? undefined);
+    clearSessionsForChannel(message.channel.id);
+    updateTask(message.channel.id, {
+      sandboxId: null,
+      status: "provisioning",
+    });
+    await message.reply(
+      "The sandbox was destroyed and all thread sessions were invalidated. A fresh sandbox will be built on the next prompt.",
+    );
+    return;
+  }
+
+  const thread = await message.startThread({
+    name: createThreadName(prompt),
+  });
+  createSession({
+    threadId: thread.id,
+    channelId: message.channel.id,
+    openCodeSessionId: null,
+    createdBy: message.author.id,
+    createdAt: Date.now(),
+  });
+
+  await runThreadPrompt({
+    thread,
+    channelId: message.channel.id,
+    prompt,
+    createdBy: message.author.id,
+  });
 }
 
-async function loadSessionState(): Promise<SessionState | undefined> {
-  const file = Bun.file(sessionStatePath);
-  if (!(await file.exists())) return undefined;
+async function runThreadPrompt(options: {
+  thread: AnyThreadChannel;
+  channelId: string;
+  prompt: string;
+  createdBy: string;
+}): Promise<void> {
+  const { thread, channelId, prompt, createdBy } = options;
+  if (inFlightThreads.has(thread.id)) {
+    await thread.send(
+      "I'm still working on the previous prompt in this thread.",
+    );
+    return;
+  }
 
+  inFlightThreads.add(thread.id);
+  let statusMessage: Message | undefined;
   try {
-    const value = (await file.json()) as Partial<SessionState>;
-    if (typeof value.sandboxId !== "string") {
-      throw new Error("Missing sandboxId");
-    }
-    return {
-      sandboxId: value.sandboxId,
-      openCodeSessionId:
-        typeof value.openCodeSessionId === "string"
-          ? value.openCodeSessionId
-          : undefined,
-      configurationHash:
-        typeof value.configurationHash === "string"
-          ? value.configurationHash
-          : undefined,
-    };
+    const depth = queueDepth(channelId);
+    statusMessage = await thread.send(
+      depth > 0
+        ? `Queued behind ${depth} running session${depth === 1 ? "" : "s"}...`
+        : "Working in OpenCode...",
+    );
+
+    await runExclusive(channelId, async () => {
+      const task = getTask(channelId);
+      if (!task || task.status === "archived") {
+        await statusMessage?.edit(
+          "This channel is no longer an active task channel.",
+        );
+        return;
+      }
+
+      const { sandbox, rebuilt } = await getOrCreateSandbox({
+        task,
+        providerEnv,
+        configHash,
+        githubToken,
+        onRebuild: async () => {
+          clearSessionsForChannel(channelId);
+          const parent = await client.channels.fetch(channelId).catch((error) => {
+            console.error("Could not fetch sandbox rebuild channel:", error);
+            return undefined;
+          });
+          if (parent?.isSendable()) {
+            await parent
+              .send(
+                "The task sandbox was rebuilt. Previous thread sessions can't be resumed.",
+              )
+              .catch((error) => {
+                console.error("Could not send sandbox rebuild notice:", error);
+              });
+          }
+        },
+      });
+
+      if (
+        sandbox.id !== task.sandboxId ||
+        task.configHash !== configHash
+      ) {
+        updateTask(channelId, {
+          sandboxId: sandbox.id,
+          configHash,
+          status: "ready",
+        });
+      }
+
+      let session = getSession(thread.id);
+      if (rebuilt || !session) {
+        createSession({
+          threadId: thread.id,
+          channelId,
+          openCodeSessionId: null,
+          createdBy,
+          createdAt: Date.now(),
+        });
+        session = getSession(thread.id);
+      }
+
+      const storedSessionId = session?.openCodeSessionId ?? undefined;
+      let step = 0;
+      const response = await runOpenCode({
+        sandbox,
+        model,
+        prompt,
+        sessionId: storedSessionId,
+        onProgress: async (event) => {
+          if (event.type === "step_start") {
+            step += 1;
+            await statusMessage?.edit(
+              step === 1
+                ? "OpenCode is thinking..."
+                : `OpenCode is continuing (step ${step})...`,
+            );
+          }
+
+          if (event.type === "tool_use") {
+            await thread.send(formatToolEvent(event));
+          }
+
+          if (event.type === "error") {
+            await thread.send("✗ OpenCode reported an error.");
+          }
+        },
+      });
+
+      if (response.sessionId !== storedSessionId) {
+        updateSessionOpenCodeId(thread.id, response.sessionId ?? null);
+      }
+      await statusMessage?.edit(truncateForDiscord(response.text));
+    });
   } catch (error) {
-    console.warn("Ignoring invalid saved session state:", error);
-    return undefined;
+    console.error("OpenCode run failed:", error);
+    if (statusMessage) {
+      await statusMessage
+        .edit("OpenCode failed to finish. Check the bot logs for details.")
+        .catch((editError) => {
+          console.error("Could not edit failure status:", editError);
+        });
+    }
+  } finally {
+    inFlightThreads.delete(thread.id);
   }
 }
 
-async function saveSessionState(value: SessionState) {
-  await mkdir(dataDirectory, { recursive: true });
-  await Bun.write(sessionStatePath, `${JSON.stringify(value, null, 2)}\n`);
-  sessionState = value;
+function stripBotMention(content: string, botId: string): string {
+  return content.replace(new RegExp(`<@!?${botId}>`, "g"), "").trim();
 }
 
-async function clearSessionState() {
-  await rm(sessionStatePath, { force: true });
-  sessionState = undefined;
+function createThreadName(prompt: string): string {
+  const cleaned = prompt
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.slice(0, 80) || "OpenCode task";
 }
 
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function formatToolEvent(event: Extract<ProgressEvent, { type: "tool_use" }>) {
+function formatToolEvent(
+  event: Extract<ProgressEvent, { type: "tool_use" }>,
+): string {
   const succeeded = event.status === "completed";
   const detail = sanitizeToolDetail(
     event.title ?? summarizeToolInput(event.input),
@@ -381,7 +321,7 @@ function formatToolEvent(event: Extract<ProgressEvent, { type: "tool_use" }>) {
   return `${succeeded ? "✓" : "✗"} **${event.tool.replaceAll("*", "")}**${detail ? ` — \`${detail}\`` : ""}`;
 }
 
-function summarizeToolInput(input?: Record<string, unknown>) {
+function summarizeToolInput(input?: Record<string, unknown>): string {
   if (!input) return "";
 
   for (const key of [
@@ -399,10 +339,10 @@ function summarizeToolInput(input?: Record<string, unknown>) {
   return "";
 }
 
-function sanitizeToolDetail(value: string) {
+function sanitizeToolDetail(value: string): string {
   let sanitized = value.replace(/\s+/g, " ").replaceAll("`", "'");
 
-  const secrets = [token, ...Object.values(providerEnv)].filter(
+  const secrets = [token, githubToken, ...Object.values(providerEnv)].filter(
     (secret): secret is string => Boolean(secret),
   );
   for (const secret of secrets) {
@@ -416,7 +356,7 @@ function sanitizeToolDetail(value: string) {
   return sanitized.slice(0, 300);
 }
 
-function truncateForDiscord(value: string) {
+function truncateForDiscord(value: string): string {
   const limit = 2_000;
   if (value.length <= limit) return value;
   return `${value.slice(0, limit - 15)}\n\n[truncated]`;
