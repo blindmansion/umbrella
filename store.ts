@@ -1,6 +1,4 @@
-import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { Pool, type QueryResult, type QueryResultRow } from "pg";
 
 export type TaskKind = "planning" | "feature" | "bugfix" | "review";
 export type TaskStatus = "provisioning" | "ready" | "archived";
@@ -41,20 +39,23 @@ export type TaskUpdate = Partial<
 >;
 
 export type StateStore = {
-  close(): void;
-  createTask(task: TaskRecord): void;
-  getTask(channelId: string): TaskRecord | undefined;
-  updateTask(channelId: string, update: TaskUpdate): TaskRecord | undefined;
-  listActiveTasks(): TaskRecord[];
-  deleteTask(channelId: string): void;
-  createSession(session: SessionRecord): void;
-  getSession(threadId: string): SessionRecord | undefined;
+  close(): Promise<void>;
+  createTask(task: TaskRecord): Promise<void>;
+  getTask(channelId: string): Promise<TaskRecord | undefined>;
+  updateTask(
+    channelId: string,
+    update: TaskUpdate,
+  ): Promise<TaskRecord | undefined>;
+  listActiveTasks(): Promise<TaskRecord[]>;
+  deleteTask(channelId: string): Promise<void>;
+  createSession(session: SessionRecord): Promise<void>;
+  getSession(threadId: string): Promise<SessionRecord | undefined>;
   updateSessionOpenCodeId(
     threadId: string,
     openCodeSessionId: string | null,
-  ): SessionRecord | undefined;
-  listSessionsForChannel(channelId: string): SessionRecord[];
-  clearSessionsForChannel(channelId: string): void;
+  ): Promise<SessionRecord | undefined>;
+  listSessionsForChannel(channelId: string): Promise<SessionRecord[]>;
+  clearSessionsForChannel(channelId: string): Promise<void>;
 };
 
 type TaskRow = {
@@ -78,17 +79,26 @@ type SessionRow = {
   created_at: number;
 };
 
-const defaultDatabasePath = "data/state.sqlite";
+export type DatabasePool = {
+  query<T extends QueryResultRow = QueryResultRow>(
+    text: string,
+    values?: unknown[],
+  ): Promise<QueryResult<T>>;
+  end(): Promise<void>;
+};
 
-export function createStore(path = defaultDatabasePath): StateStore {
-  if (path !== ":memory:") {
-    mkdirSync(dirname(path), { recursive: true });
+export async function createStore(options: {
+  connectionString?: string;
+  pool?: DatabasePool;
+} = {}): Promise<StateStore> {
+  const connectionString = options.connectionString ?? Bun.env.DATABASE_URL;
+  if (!options.pool && !connectionString) {
+    throw new Error("DATABASE_URL must be set");
   }
 
-  const database = new Database(path, { create: true });
-  database.exec("PRAGMA foreign_keys = ON");
-  database.exec("PRAGMA journal_mode = WAL");
-  database.exec(`
+  const database: DatabasePool =
+    options.pool ?? new Pool({ connectionString });
+  await database.query(`
     CREATE TABLE IF NOT EXISTS tasks (
       channel_id TEXT PRIMARY KEY,
       kind TEXT NOT NULL CHECK (kind IN ('planning', 'feature', 'bugfix', 'review')),
@@ -99,7 +109,7 @@ export function createStore(path = defaultDatabasePath): StateStore {
       status TEXT NOT NULL CHECK (status IN ('provisioning', 'ready', 'archived')),
       config_hash TEXT NULL,
       status_message_id TEXT NULL,
-      created_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -107,64 +117,46 @@ export function createStore(path = defaultDatabasePath): StateStore {
       channel_id TEXT NOT NULL REFERENCES tasks(channel_id) ON DELETE CASCADE,
       opencode_session_id TEXT NULL,
       created_by TEXT NULL,
-      created_at INTEGER NOT NULL
+      created_at BIGINT NOT NULL
     );
   `);
 
-  const insertTask = database.prepare(`
-    INSERT INTO tasks (
-      channel_id, kind, repo, ref_number, branch, sandbox_id, status,
-      config_hash, status_message_id, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const selectTask = database.prepare(
-    "SELECT * FROM tasks WHERE channel_id = ?",
-  );
-  const selectActiveTasks = database.prepare(
-    "SELECT * FROM tasks WHERE status != 'archived' ORDER BY created_at",
-  );
-  const removeTask = database.prepare("DELETE FROM tasks WHERE channel_id = ?");
-  const insertSession = database.prepare(`
-    INSERT INTO sessions (
-      thread_id, channel_id, opencode_session_id, created_by, created_at
-    ) VALUES (?, ?, ?, ?, ?)
-  `);
-  const selectSession = database.prepare(
-    "SELECT * FROM sessions WHERE thread_id = ?",
-  );
-  const selectChannelSessions = database.prepare(
-    "SELECT * FROM sessions WHERE channel_id = ? ORDER BY created_at",
-  );
-  const removeChannelSessions = database.prepare(
-    "DELETE FROM sessions WHERE channel_id = ?",
-  );
-
   return {
-    close() {
-      database.close();
+    async close() {
+      await database.end();
     },
 
-    createTask(task) {
-      insertTask.run(
-        task.channelId,
-        task.kind,
-        task.repo,
-        task.refNumber,
-        task.branch,
-        task.sandboxId,
-        task.status,
-        task.configHash,
-        task.statusMessageId,
-        task.createdAt,
+    async createTask(task) {
+      await database.query(
+        `INSERT INTO tasks (
+          channel_id, kind, repo, ref_number, branch, sandbox_id, status,
+          config_hash, status_message_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          task.channelId,
+          task.kind,
+          task.repo,
+          task.refNumber,
+          task.branch,
+          task.sandboxId,
+          task.status,
+          task.configHash,
+          task.statusMessageId,
+          task.createdAt,
+        ],
       );
     },
 
-    getTask(channelId) {
-      const row = selectTask.get(channelId) as TaskRow | null;
+    async getTask(channelId) {
+      const { rows } = await database.query<TaskRow>(
+        "SELECT * FROM tasks WHERE channel_id = $1",
+        [channelId],
+      );
+      const row = rows[0];
       return row ? taskFromRow(row) : undefined;
     },
 
-    updateTask(channelId, update) {
+    async updateTask(channelId, update) {
       const columns: Record<keyof TaskUpdate, string> = {
         kind: "kind",
         repo: "repo",
@@ -181,115 +173,150 @@ export function createStore(path = defaultDatabasePath): StateStore {
       );
       if (entries.length > 0) {
         const assignments = entries
-          .map(([key]) => `${columns[key]} = ?`)
+          .map(([key], index) => `${columns[key]} = $${index + 1}`)
           .join(", ");
-        database
-          .prepare(`UPDATE tasks SET ${assignments} WHERE channel_id = ?`)
-          .run(...entries.map(([, value]) => value), channelId);
+        await database.query(
+          `UPDATE tasks SET ${assignments} WHERE channel_id = $${entries.length + 1}`,
+          [...entries.map(([, value]) => value), channelId],
+        );
       }
-      const row = selectTask.get(channelId) as TaskRow | null;
+      const { rows } = await database.query<TaskRow>(
+        "SELECT * FROM tasks WHERE channel_id = $1",
+        [channelId],
+      );
+      const row = rows[0];
       return row ? taskFromRow(row) : undefined;
     },
 
-    listActiveTasks() {
-      return (selectActiveTasks.all() as TaskRow[]).map(taskFromRow);
+    async listActiveTasks() {
+      const { rows } = await database.query<TaskRow>(
+        "SELECT * FROM tasks WHERE status != 'archived' ORDER BY created_at",
+      );
+      return rows.map(taskFromRow);
     },
 
-    deleteTask(channelId) {
-      removeTask.run(channelId);
+    async deleteTask(channelId) {
+      await database.query("DELETE FROM tasks WHERE channel_id = $1", [channelId]);
     },
 
-    createSession(session) {
-      insertSession.run(
-        session.threadId,
-        session.channelId,
-        session.openCodeSessionId,
-        session.createdBy,
-        session.createdAt,
+    async createSession(session) {
+      await database.query(
+        `INSERT INTO sessions (
+          thread_id, channel_id, opencode_session_id, created_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5)`,
+        [
+          session.threadId,
+          session.channelId,
+          session.openCodeSessionId,
+          session.createdBy,
+          session.createdAt,
+        ],
       );
     },
 
-    getSession(threadId) {
-      const row = selectSession.get(threadId) as SessionRow | null;
-      return row ? sessionFromRow(row) : undefined;
-    },
-
-    updateSessionOpenCodeId(threadId, openCodeSessionId) {
-      database
-        .prepare(
-          "UPDATE sessions SET opencode_session_id = ? WHERE thread_id = ?",
-        )
-        .run(openCodeSessionId, threadId);
-      const row = selectSession.get(threadId) as SessionRow | null;
-      return row ? sessionFromRow(row) : undefined;
-    },
-
-    listSessionsForChannel(channelId) {
-      return (selectChannelSessions.all(channelId) as SessionRow[]).map(
-        sessionFromRow,
+    async getSession(threadId) {
+      const { rows } = await database.query<SessionRow>(
+        "SELECT * FROM sessions WHERE thread_id = $1",
+        [threadId],
       );
+      const row = rows[0];
+      return row ? sessionFromRow(row) : undefined;
     },
 
-    clearSessionsForChannel(channelId) {
-      removeChannelSessions.run(channelId);
+    async updateSessionOpenCodeId(threadId, openCodeSessionId) {
+      const { rows } = await database.query<SessionRow>(
+        `UPDATE sessions
+         SET opencode_session_id = $1
+         WHERE thread_id = $2
+         RETURNING *`,
+        [openCodeSessionId, threadId],
+      );
+      const row = rows[0];
+      return row ? sessionFromRow(row) : undefined;
+    },
+
+    async listSessionsForChannel(channelId) {
+      const { rows } = await database.query<SessionRow>(
+        "SELECT * FROM sessions WHERE channel_id = $1 ORDER BY created_at",
+        [channelId],
+      );
+      return rows.map(sessionFromRow);
+    },
+
+    async clearSessionsForChannel(channelId) {
+      await database.query("DELETE FROM sessions WHERE channel_id = $1", [
+        channelId,
+      ]);
     },
   };
 }
 
-let defaultStore: StateStore | undefined;
+let defaultStore: Promise<StateStore> | undefined;
 
-function getDefaultStore(): StateStore {
+function getDefaultStore(): Promise<StateStore> {
   defaultStore ??= createStore();
   return defaultStore;
 }
 
-export function createTask(task: TaskRecord): void {
-  getDefaultStore().createTask(task);
+export async function initializeStore(): Promise<void> {
+  await getDefaultStore();
 }
 
-export function getTask(channelId: string): TaskRecord | undefined {
-  return getDefaultStore().getTask(channelId);
+export async function createTask(task: TaskRecord): Promise<void> {
+  return (await getDefaultStore()).createTask(task);
 }
 
-export function updateTask(
+export async function getTask(
+  channelId: string,
+): Promise<TaskRecord | undefined> {
+  return (await getDefaultStore()).getTask(channelId);
+}
+
+export async function updateTask(
   channelId: string,
   update: TaskUpdate,
-): TaskRecord | undefined {
-  return getDefaultStore().updateTask(channelId, update);
+): Promise<TaskRecord | undefined> {
+  return (await getDefaultStore()).updateTask(channelId, update);
 }
 
-export function listActiveTasks(): TaskRecord[] {
-  return getDefaultStore().listActiveTasks();
+export async function listActiveTasks(): Promise<TaskRecord[]> {
+  return (await getDefaultStore()).listActiveTasks();
 }
 
-export function deleteTask(channelId: string): void {
-  getDefaultStore().deleteTask(channelId);
+export async function deleteTask(channelId: string): Promise<void> {
+  return (await getDefaultStore()).deleteTask(channelId);
 }
 
-export function createSession(session: SessionRecord): void {
-  getDefaultStore().createSession(session);
+export async function createSession(session: SessionRecord): Promise<void> {
+  return (await getDefaultStore()).createSession(session);
 }
 
-export function getSession(threadId: string): SessionRecord | undefined {
-  return getDefaultStore().getSession(threadId);
+export async function getSession(
+  threadId: string,
+): Promise<SessionRecord | undefined> {
+  return (await getDefaultStore()).getSession(threadId);
 }
 
-export function updateSessionOpenCodeId(
+export async function updateSessionOpenCodeId(
   threadId: string,
   openCodeSessionId: string | null,
-): SessionRecord | undefined {
-  return getDefaultStore().updateSessionOpenCodeId(
+): Promise<SessionRecord | undefined> {
+  return (await getDefaultStore()).updateSessionOpenCodeId(
     threadId,
     openCodeSessionId,
   );
 }
 
-export function listSessionsForChannel(channelId: string): SessionRecord[] {
-  return getDefaultStore().listSessionsForChannel(channelId);
+export async function listSessionsForChannel(
+  channelId: string,
+): Promise<SessionRecord[]> {
+  return (await getDefaultStore()).listSessionsForChannel(channelId);
 }
 
-export function clearSessionsForChannel(channelId: string): void {
-  getDefaultStore().clearSessionsForChannel(channelId);
+export async function clearSessionsForChannel(
+  channelId: string,
+): Promise<void> {
+  return (await getDefaultStore()).clearSessionsForChannel(channelId);
 }
 
 function taskFromRow(row: TaskRow): TaskRecord {
@@ -303,7 +330,7 @@ function taskFromRow(row: TaskRow): TaskRecord {
     status: row.status,
     configHash: row.config_hash,
     statusMessageId: row.status_message_id,
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }
 
@@ -313,6 +340,6 @@ function sessionFromRow(row: SessionRow): SessionRecord {
     channelId: row.channel_id,
     openCodeSessionId: row.opencode_session_id,
     createdBy: row.created_by,
-    createdAt: row.created_at,
+    createdAt: Number(row.created_at),
   };
 }

@@ -1,10 +1,26 @@
-# Base compose: local, auth-less Phoenix for development.
+# Base compose: local Postgres and auth-less Phoenix for development.
 #
-# `bun run dev` starts this file and then runs the bot against it. Production
-# extends it with docker-compose.prod.yml (see `bun run prod`).
+# `bun run dev` starts these and then runs the bot against them. Production
+# extends this file with docker-compose.prod.yml (see `bun run prod`).
 name: umbrella
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: umbrella
+      POSTGRES_PASSWORD: umbrella
+      POSTGRES_DB: umbrella
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U umbrella"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:
@@ -20,4 +36,5 @@ services:
       - phoenix-data:/mnt/phoenix
 
 volumes:
+  postgres-data:
   phoenix-data:

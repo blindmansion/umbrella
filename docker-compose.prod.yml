@@ -22,10 +22,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Point the bot at the bundled Postgres unless .env overrides it.
+      DATABASE_URL: "${DATABASE_URL:-postgres://umbrella:umbrella@postgres:5432/umbrella}"
     depends_on:
-      - phoenix
-    volumes:
-      - bot-data:/app/data
-
-volumes:
-  bot-data:
+      postgres:
+        condition: service_healthy
+      phoenix:
+        condition: service_started

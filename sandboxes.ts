@@ -10,11 +10,11 @@ const channelQueueDepths = new Map<string, number>();
 
 export function computeConfigHash(
   model: string,
-  providerEnv: Record<string, string>,
+  sandboxEnv: Record<string, string>,
   extra: Record<string, unknown> = {},
 ): string {
   return createHash("sha256")
-    .update(JSON.stringify({ model, providerEnv, ...extra }))
+    .update(JSON.stringify({ model, sandboxEnv, ...extra }))
     .digest("hex");
 }
 
@@ -51,7 +51,7 @@ export function queueDepth(channelId: string): number {
 
 export async function getOrCreateSandbox(options: {
   task: TaskRecord;
-  providerEnv: Record<string, string>;
+  sandboxEnv: Record<string, string>;
   configHash: string;
   githubToken?: string;
   tracing?: SandboxTracing;
@@ -60,7 +60,7 @@ export async function getOrCreateSandbox(options: {
 }): Promise<{ sandbox: Sandbox; rebuilt: boolean }> {
   const {
     task,
-    providerEnv,
+    sandboxEnv,
     configHash,
     githubToken,
     tracing,
@@ -134,7 +134,7 @@ export async function getOrCreateSandbox(options: {
 
   const sandbox = await Sandbox.create({
     idleTimeoutMinutes: 60,
-    env: providerEnv,
+    env: sandboxEnv,
     networkIsolation,
   });
 
@@ -162,6 +162,14 @@ export async function bootstrapSandbox(
   const cloneUrl = encodedToken
     ? `https://x-access-token:${encodedToken}@github.com/${task.repo}.git`
     : `https://github.com/${task.repo}.git`;
+
+  await runRequired(
+    sandbox,
+    'if [ -n "${GIT_AUTHOR_NAME:-}" ]; then git config --global user.name "$GIT_AUTHOR_NAME"; fi; if [ -n "${GIT_AUTHOR_EMAIL:-}" ]; then git config --global user.email "$GIT_AUTHOR_EMAIL"; fi',
+    "configure git author",
+    30,
+    githubToken,
+  );
 
   await runRequired(
     sandbox,

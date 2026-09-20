@@ -1,12 +1,14 @@
 .git
 .gitignore
+.github
+.agents
+.cursor
 node_modules
 data
+coverage
 .env
 .env.*
 !.env.example
-Dockerfile
-docker-compose*.yml
+*.log
 bun.lockb
-*.md
 scripts

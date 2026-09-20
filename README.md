@@ -1,97 +1,130 @@
-# Railway OpenCode Sandbox
+# Umbrella
 
-This project explores running coding agents in short-lived Railway sandboxes and
-streaming their activity to an application.
+Umbrella is a Discord bot that turns GitHub issues and pull requests into task
+channels backed by short-lived Railway sandboxes. Each Discord thread keeps an
+OpenCode session, while all threads in a task channel share one repository
+checkout and branch.
 
-## What we know
+Umbrella is developed on Railway. The repository defines the complete
+production stack as code:
 
-- Railway's TypeScript SDK can create isolated Linux sandboxes, execute
-  long-running commands, stream stdout and stderr, and reconnect to durable exec
-  sessions.
-- The default sandbox image includes OpenCode. The tested image reported
-  OpenCode `1.18.31`.
-- OpenCode accepts provider credentials from sandbox environment variables.
-  `OPENROUTER_API_KEY` and `ANTHROPIC_API_KEY` were both detected successfully.
-- `openrouter/qwen/qwen3-coder` was tested through OpenRouter and returned
-  newline-delimited JSON events with `step_start`, `text`, and `step_finish`.
-- `opencode run --format json` is the simplest interface for an MVP. Its JSONL
-  output can be normalized by a backend and forwarded to a UI with
-  Server-Sent Events.
-- Provider secrets should be supplied through `Sandbox.create({ env })`, not
-  per-command environment variables. Sandboxes are destroyed in `finally`
-  blocks after each run.
+- the Umbrella bot, built with `Dockerfile.bot`
+- Arize Phoenix, built with `Dockerfile.phoenix`
+- separate managed PostgreSQL databases for Umbrella and Phoenix
+- GitHub sources pinned to `main`, so merges redeploy the running instance
 
-## Basic goals
+## Railway quickstart
 
-1. Accept a prompt from an application.
-2. Create a prepared Railway sandbox and run OpenCode against a workspace.
-3. Parse OpenCode's JSONL output into stable application events.
-4. Stream those events to a UI while the agent works.
-5. Support cancellation and eventual reconnection through Railway's durable
-   exec session name.
-6. Capture the agent's final response, status, usage, and repository changes,
-   then clean up the sandbox.
+Prerequisites:
 
-## Current smoke test
+- a Railway account and the Railway CLI
+- a Discord application with the privileged **Message Content** intent enabled
+- an account-scoped Railway API token for creating sandboxes
+- an Anthropic or Fireworks API key
+- the Railway GitHub App authorized for `blindmansion/umbrella`
 
-Set the Railway credentials and at least one model-provider key in `.env`.
-OpenRouter defaults to Qwen 3 Coder:
-
-```env
-RAILWAY_API_TOKEN=...
-RAILWAY_ENVIRONMENT_ID=...
-OPENROUTER_API_KEY=...
-OPENCODE_MODEL=openrouter/qwen/qwen3-coder
-```
-
-Run a prompt:
+Clone the repository and install its dependencies:
 
 ```bash
-bun run scripts/run-opencode.ts "Inspect the project and summarize it"
+git clone https://github.com/blindmansion/umbrella.git
+cd umbrella
+bun install --frozen-lockfile
 ```
 
-The script prints OpenCode's raw JSONL stream to stdout and diagnostic IDs to
-stderr. `scripts/probe-opencode.ts` checks the sandbox's OpenCode installation,
-provider detection, model availability, and authentication failure behavior.
+The official Railway `use-railway` skill is checked into
+`.agents/skills/use-railway`. Restore its Cursor/OpenCode links after cloning:
 
-## Discord bot usage
-
-Configure the bot and Railway sandbox credentials in `.env`:
-
-```env
-DISCORD_BOT_TOKEN=...
-RAILWAY_API_TOKEN=...
-RAILWAY_ENVIRONMENT_ID=...
-ANTHROPIC_API_KEY=...
-# Or use FIREWORKS_API_KEY instead of ANTHROPIC_API_KEY.
-# GITHUB_TOKEN is optional, but recommended for private repositories and
-# higher GitHub API rate limits.
-GITHUB_TOKEN=...
-# OPENCODE_MODEL is optional.
-OPENCODE_MODEL=...
+```bash
+npx skills experimental_install
 ```
 
-Use `/task url:<github-issue-or-pr-url>` to create a task channel and eagerly
-provision its sandbox. The optional `kind` is `planning`, `feature`, `bugfix`,
-or `review`; issue URLs default to `feature` and pull request URLs default to
-`review`. Feature branches default to `feat/<number>-<title>`, reviews use the
-pull request head branch, and planning or bugfix tasks use the repository's
-default branch. The optional `branch` overrides these defaults. Use `/close`
-inside a task channel to destroy its sandbox, archive its active threads, and
-retain the channel history.
+Create or link a Railway project, then review and apply the infrastructure:
 
-Mention the bot with a prompt in a task channel to fork a new thread. Each
-thread is one OpenCode session, while every thread in the channel shares the
-task's sandbox and branch. Sending `reset` in a thread starts a new OpenCode
-session in that same sandbox. Mentioning the bot with `reset` in the task
-channel destroys the sandbox and invalidates every thread session; the next
-prompt rebuilds it.
+```bash
+railway login
+railway init --name umbrella
+bun run railway:plan
+bun run railway:apply
+```
 
-Enable the privileged **Message Content** intent for the bot in Discord's
-developer portal. The invite needs the `bot` and `applications.commands`
-scopes plus View Channel, Send Messages, Read Message History, Create Public
-Threads, Send Messages in Threads, Manage Channels, and Manage Messages
-permissions.
+If the project already exists, use `railway link --project umbrella` instead of
+`railway init`. The plan creates four services: `umbrella`,
+`umbrella-postgres`, `phoenix`, and `phoenix-postgres`.
+
+Set the bot secrets. At least one model-provider key is required:
+
+```bash
+railway variable set \
+  DISCORD_BOT_TOKEN=... \
+  RAILWAY_API_TOKEN=... \
+  GITHUB_TOKEN=... \
+  ANTHROPIC_API_KEY=... \
+  --service umbrella
+```
+
+`FIREWORKS_API_KEY` can replace `ANTHROPIC_API_KEY`. Optional variables are
+`OPENCODE_MODEL`, `GIT_AUTHOR_NAME`, and `GIT_AUTHOR_EMAIL`.
+
+Enable Phoenix authentication with generated secrets:
+
+```bash
+railway variable set \
+  PHOENIX_SECRET="$(openssl rand -hex 32)" \
+  PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD="replace-with-a-strong-password" \
+  --service phoenix
+```
+
+Generate a public domain for the Phoenix service from Railway's Networking
+settings. Phoenix listens on port `6006`; OTLP/gRPC listens privately on
+`4317`.
+
+The infrastructure wires the bot to Phoenix over Railway's private network
+(`PHOENIX_ENDPOINT=http://phoenix.railway.internal:6006` and
+`SANDBOX_NETWORK_ISOLATION=PRIVATE`). Log into the Phoenix domain as
+`admin@localhost`, create a system API key under **Settings → API Keys**, and
+share it with the bot so sandboxes can export:
+
+```bash
+railway variable set \
+  PHOENIX_API_KEY=... \
+  --service umbrella
+```
+
+Without `PHOENIX_API_KEY` the bot still exports to an auth-less Phoenix, but
+authenticated deployments need it.
+
+The databases are connected through Railway's private network. Umbrella creates
+its `tasks` and `sessions` tables during startup. Existing SQLite files are not
+imported; a first Railway deployment starts with empty state.
+
+After setup, every merge to `main` triggers a new Umbrella build and replaces
+the running bot when the deployment is healthy. Changes outside
+`Dockerfile.phoenix` do not rebuild Phoenix.
+
+## Local development
+
+`bun run dev` starts the bundled Postgres and an auth-less Phoenix with
+`docker-compose.yml`, then runs the bot on the host. Point `DATABASE_URL` at the
+compose Postgres (`postgres://umbrella:umbrella@localhost:5432/umbrella`) and
+set `PHOENIX_ENDPOINT` to a URL the sandboxes can reach. From a developer
+machine that usually means a tunnel to Phoenix, since sandboxes run on Railway.
+
+
+## Discord usage
+
+Use `/task url:<github-issue-or-pr-url>` to create a task channel and provision
+its sandbox. Issue URLs default to feature work and pull request URLs default
+to review work. Use `/close` in a task channel to destroy its sandbox and
+archive active threads while preserving channel history.
+
+Mention the bot in a task channel to create a thread. Each thread is one
+OpenCode session. Send `reset` in a thread to start a fresh session in the same
+sandbox, or mention the bot with `reset` in the task channel to rebuild the
+sandbox and invalidate all thread sessions.
+
+The Discord invite needs the `bot` and `applications.commands` scopes plus View
+Channel, Send Messages, Read Message History, Create Public Threads, Send
+Messages in Threads, Manage Channels, and Manage Messages permissions.
 
 ## Phoenix tracing
 
@@ -104,11 +137,11 @@ survive sandbox rebuilds.
 ### Phoenix and the bot
 
 `docker-compose.yml` runs the latest Phoenix with a persistent volume and
-authentication disabled, for a quick local instance. `docker-compose.prod.yml`
+authentication disabled, alongside a Postgres for the bot. `docker-compose.prod.yml`
 extends it, turning authentication on and adding the bot service:
 
 ```bash
-# Development Phoenix, then the bot on the host
+# Development Postgres + Phoenix, then the bot on the host
 bun run dev
 
 # Phoenix with auth plus the containerized bot

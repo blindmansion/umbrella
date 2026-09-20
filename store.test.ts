@@ -1,10 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { newDb } from "pg-mem";
 import { queueDepth, runExclusive } from "./sandboxes";
 import {
   createStore,
+  type DatabasePool,
   type SessionRecord,
   type TaskRecord,
 } from "./store";
+
+async function createTestStore() {
+  const memory = newDb({ autoCreateForeignKeyIndices: true });
+  const adapter = memory.adapters.createPg();
+  return createStore({
+    pool: new adapter.Pool() as unknown as DatabasePool,
+  });
+}
 
 function task(
   channelId: string,
@@ -41,8 +51,8 @@ function session(
 }
 
 describe("state store", () => {
-  test("creates, reads, updates, lists, and deletes tasks", () => {
-    const store = createStore(":memory:");
+  test("creates, reads, updates, lists, and deletes tasks", async () => {
+    const store = await createTestStore();
     const first = task("channel-1");
     const archived = task("channel-2", {
       kind: "planning",
@@ -50,11 +60,11 @@ describe("state store", () => {
       status: "archived",
     });
 
-    store.createTask(first);
-    store.createTask(archived);
-    expect(store.getTask(first.channelId)).toEqual(first);
+    await store.createTask(first);
+    await store.createTask(archived);
+    expect(await store.getTask(first.channelId)).toEqual(first);
 
-    const updated = store.updateTask(first.channelId, {
+    const updated = await store.updateTask(first.channelId, {
       status: "ready",
       sandboxId: "sandbox-1",
       configHash: "hash-1",
@@ -67,15 +77,15 @@ describe("state store", () => {
       configHash: "hash-1",
       statusMessageId: "message-1",
     });
-    expect(store.listActiveTasks()).toEqual([updated!]);
+    expect(await store.listActiveTasks()).toEqual([updated!]);
 
-    store.deleteTask(first.channelId);
-    expect(store.getTask(first.channelId)).toBeUndefined();
-    store.close();
+    await store.deleteTask(first.channelId);
+    expect(await store.getTask(first.channelId)).toBeUndefined();
+    await store.close();
   });
 
-  test("creates, reads, updates, and clears sessions", () => {
-    const store = createStore(":memory:");
+  test("creates, reads, updates, and clears sessions", async () => {
+    const store = await createTestStore();
     const parent = task("channel-1");
     const first = session("thread-1", parent.channelId);
     const second = session("thread-2", parent.channelId, {
@@ -83,38 +93,41 @@ describe("state store", () => {
       createdAt: first.createdAt + 1,
     });
 
-    store.createTask(parent);
-    store.createSession(first);
-    store.createSession(second);
-    expect(store.getSession(first.threadId)).toEqual(first);
+    await store.createTask(parent);
+    await store.createSession(first);
+    await store.createSession(second);
+    expect(await store.getSession(first.threadId)).toEqual(first);
 
     expect(
-      store.updateSessionOpenCodeId(first.threadId, "opencode-session-1"),
+      await store.updateSessionOpenCodeId(
+        first.threadId,
+        "opencode-session-1",
+      ),
     ).toEqual({
       ...first,
       openCodeSessionId: "opencode-session-1",
     });
-    expect(store.listSessionsForChannel(parent.channelId)).toEqual([
+    expect(await store.listSessionsForChannel(parent.channelId)).toEqual([
       { ...first, openCodeSessionId: "opencode-session-1" },
       second,
     ]);
 
-    store.clearSessionsForChannel(parent.channelId);
-    expect(store.listSessionsForChannel(parent.channelId)).toEqual([]);
-    store.close();
+    await store.clearSessionsForChannel(parent.channelId);
+    expect(await store.listSessionsForChannel(parent.channelId)).toEqual([]);
+    await store.close();
   });
 
-  test("deleting a task cascades to its sessions", () => {
-    const store = createStore(":memory:");
+  test("deleting a task cascades to its sessions", async () => {
+    const store = await createTestStore();
     const parent = task("channel-1");
     const child = session("thread-1", parent.channelId);
 
-    store.createTask(parent);
-    store.createSession(child);
-    store.deleteTask(parent.channelId);
+    await store.createTask(parent);
+    await store.createSession(child);
+    await store.deleteTask(parent.channelId);
 
-    expect(store.getSession(child.threadId)).toBeUndefined();
-    store.close();
+    expect(await store.getSession(child.threadId)).toBeUndefined();
+    await store.close();
   });
 });
 

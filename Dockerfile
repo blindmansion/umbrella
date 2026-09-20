@@ -13,9 +13,9 @@ ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY index.ts opencode.ts sandboxes.ts store.ts tasks.ts tracing.ts ./
-# The bot persists its sqlite state here; the compose file mounts a volume over
-# it. Owned by the unprivileged `bun` user so writes work at runtime.
-RUN mkdir -p /app/data && chown -R bun:bun /app
+# State lives in PostgreSQL, so the image is read-only at runtime. Own /app by
+# the unprivileged `bun` user so any incidental writes still succeed.
+RUN chown -R bun:bun /app
 USER bun
 
 CMD ["bun", "run", "index.ts"]

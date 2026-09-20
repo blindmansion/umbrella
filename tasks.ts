@@ -24,7 +24,7 @@ import type { SandboxTracing } from "./tracing";
 
 export type TaskCommandContext = {
   client: Client;
-  providerEnv: Record<string, string>;
+  sandboxEnv: Record<string, string>;
   configHash: string;
   githubToken?: string;
   tracing?: SandboxTracing;
@@ -103,7 +103,7 @@ export async function updateStatusMessage(
     const channel = await client.channels.fetch(task.channelId);
     if (!channel?.isTextBased() || !("messages" in channel)) return;
     const message = await channel.messages.fetch(task.statusMessageId);
-    await message.edit(renderTaskStatus(task));
+    await message.edit(await renderTaskStatus(task));
   } catch (error) {
     console.warn(
       `Could not refresh task status for channel ${task.channelId}:`,
@@ -190,9 +190,9 @@ async function createTaskChannel(
       statusMessageId: null,
       createdAt: Date.now(),
     };
-    createTask(task);
+    await createTask(task);
 
-    const statusMessage = await channel.send(renderTaskStatus(task));
+    const statusMessage = await channel.send(await renderTaskStatus(task));
     await statusMessage.pin("Task status").catch((error) => {
       console.warn(
         `Could not pin task status in channel ${channel.id}:`,
@@ -200,19 +200,21 @@ async function createTaskChannel(
       );
     });
     const taskWithMessage =
-      updateTask(channel.id, { statusMessageId: statusMessage.id }) ?? task;
+      (await updateTask(channel.id, {
+        statusMessageId: statusMessage.id,
+      })) ?? task;
 
     try {
       await runExclusive(channel.id, async () => {
         const { sandbox } = await getOrCreateSandbox({
           task: taskWithMessage,
-          providerEnv: context.providerEnv,
+          sandboxEnv: context.sandboxEnv,
           configHash: context.configHash,
           githubToken: context.githubToken,
           tracing: context.tracing,
           networkIsolation: context.networkIsolation,
         });
-        const readyTask = updateTask(channel.id, {
+        const readyTask = await updateTask(channel.id, {
           sandboxId: sandbox.id,
           configHash: context.configHash,
           status: "ready",
@@ -222,10 +224,12 @@ async function createTaskChannel(
       await interaction.editReply(`Task ready: ${channel}`);
     } catch (error) {
       const detail = sanitizeError(error, context);
-      const currentTask = getTask(channel.id);
+      const currentTask = await getTask(channel.id);
       if (currentTask) {
         await statusMessage
-          .edit(`${renderTaskStatus(currentTask)}\n**Provisioning error:** ${detail}`)
+          .edit(
+            `${await renderTaskStatus(currentTask)}\n**Provisioning error:** ${detail}`,
+          )
           .catch((editError) => {
             console.warn(
               `Could not show provisioning failure in channel ${channel.id}:`,
@@ -248,7 +252,9 @@ async function closeTaskChannel(
   interaction: ChatInputCommandInteraction,
   client: Client,
 ): Promise<void> {
-  const task = interaction.channelId ? getTask(interaction.channelId) : undefined;
+  const task = interaction.channelId
+    ? await getTask(interaction.channelId)
+    : undefined;
   if (!task) {
     await interaction.reply({
       content: "`/close` must be used inside a task channel.",
@@ -260,8 +266,8 @@ async function closeTaskChannel(
   await interaction.deferReply();
   try {
     await destroySandbox(task.channelId, task.sandboxId ?? undefined);
-    clearSessionsForChannel(task.channelId);
-    const archivedTask = updateTask(task.channelId, {
+    await clearSessionsForChannel(task.channelId);
+    const archivedTask = await updateTask(task.channelId, {
       status: "archived",
       sandboxId: null,
     });
@@ -431,8 +437,8 @@ function slugify(value: string): string {
     .replace(/-+/g, "-");
 }
 
-function renderTaskStatus(task: TaskRecord): string {
-  const sessions = listSessionsForChannel(task.channelId).length;
+async function renderTaskStatus(task: TaskRecord): Promise<string> {
+  const sessions = (await listSessionsForChannel(task.channelId)).length;
   const reference =
     task.refNumber === null
       ? `https://github.com/${task.repo}`
@@ -448,12 +454,12 @@ function renderTaskStatus(task: TaskRecord): string {
 
 function sanitizeError(
   error: unknown,
-  context?: Pick<TaskCommandContext, "githubToken" | "providerEnv">,
+  context?: Pick<TaskCommandContext, "githubToken" | "sandboxEnv">,
 ): string {
   let message = error instanceof Error ? error.message : String(error);
   const secrets = [
     context?.githubToken,
-    ...Object.values(context?.providerEnv ?? {}),
+    ...Object.values(context?.sandboxEnv ?? {}),
   ].filter((secret): secret is string => Boolean(secret));
   for (const secret of secrets) {
     message = message.replaceAll(secret, "[redacted]");
