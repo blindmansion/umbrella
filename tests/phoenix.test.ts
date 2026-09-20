@@ -17,6 +17,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
     status: "provisioning",
     configHash: null,
     statusMessageId: null,
+    model: null,
     createdAt: 0,
     ...overrides,
   };
