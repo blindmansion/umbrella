@@ -40,6 +40,20 @@ if (Bun.env.FIREWORKS_API_KEY) {
   providerEnv.FIREWORKS_API_KEY = Bun.env.FIREWORKS_API_KEY;
 }
 
+const sandboxEnv: Record<string, string> = { ...providerEnv };
+if (githubToken) {
+  sandboxEnv.GITHUB_TOKEN = githubToken;
+  sandboxEnv.GH_TOKEN = githubToken;
+}
+if (Bun.env.GIT_AUTHOR_NAME) {
+  sandboxEnv.GIT_AUTHOR_NAME = Bun.env.GIT_AUTHOR_NAME;
+  sandboxEnv.GIT_COMMITTER_NAME = Bun.env.GIT_AUTHOR_NAME;
+}
+if (Bun.env.GIT_AUTHOR_EMAIL) {
+  sandboxEnv.GIT_AUTHOR_EMAIL = Bun.env.GIT_AUTHOR_EMAIL;
+  sandboxEnv.GIT_COMMITTER_EMAIL = Bun.env.GIT_AUTHOR_EMAIL;
+}
+
 if (!token) {
   throw new Error("DISCORD_BOT_TOKEN must be set in .env");
 }
@@ -54,7 +68,7 @@ const model =
   (providerEnv.FIREWORKS_API_KEY
     ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
-const configHash = computeConfigHash(model, providerEnv);
+const configHash = computeConfigHash(model, sandboxEnv);
 
 const client = new Client({
   intents: [
@@ -107,7 +121,7 @@ client.on(Events.InteractionCreate, (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   void handleTaskInteraction(interaction, {
     client,
-    providerEnv,
+    sandboxEnv,
     configHash,
     githubToken,
   }).catch(async (error) => {
@@ -261,7 +275,7 @@ async function runThreadPrompt(options: {
 
       const { sandbox, rebuilt } = await getOrCreateSandbox({
         task,
-        providerEnv,
+        sandboxEnv,
         configHash,
         githubToken,
         onRebuild: async () => {

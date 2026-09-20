@@ -22,7 +22,7 @@ import {
 
 export type TaskCommandContext = {
   client: Client;
-  providerEnv: Record<string, string>;
+  sandboxEnv: Record<string, string>;
   configHash: string;
   githubToken?: string;
 };
@@ -202,7 +202,7 @@ async function createTaskChannel(
       await runExclusive(channel.id, async () => {
         const { sandbox } = await getOrCreateSandbox({
           task: taskWithMessage,
-          providerEnv: context.providerEnv,
+          sandboxEnv: context.sandboxEnv,
           configHash: context.configHash,
           githubToken: context.githubToken,
         });
@@ -442,12 +442,12 @@ function renderTaskStatus(task: TaskRecord): string {
 
 function sanitizeError(
   error: unknown,
-  context?: Pick<TaskCommandContext, "githubToken" | "providerEnv">,
+  context?: Pick<TaskCommandContext, "githubToken" | "sandboxEnv">,
 ): string {
   let message = error instanceof Error ? error.message : String(error);
   const secrets = [
     context?.githubToken,
-    ...Object.values(context?.providerEnv ?? {}),
+    ...Object.values(context?.sandboxEnv ?? {}),
   ].filter((secret): secret is string => Boolean(secret));
   for (const secret of secrets) {
     message = message.replaceAll(secret, "[redacted]");
