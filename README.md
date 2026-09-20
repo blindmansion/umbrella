@@ -128,6 +128,20 @@ sandbox, reset the task channel to rebuild the sandbox and invalidate all thread
 sessions, or close the task to destroy its sandbox and archive active threads
 while preserving channel history.
 
+Requests that don't have a GitHub issue or pull request run against the
+server's configured repository. An admin sets it once with
+`/repo set blindmansion/umbrella` (and can inspect it with `/repo show` or
+remove it with `/repo clear`). After that, mention the bot with a question or
+request in any channel—or just ask confidently enough for intent
+classification to pick it up—and the bot creates a task channel in that
+repository, provisions a sandbox on its default branch, and starts a session
+with what you asked. `/task` also accepts a `repo` option for a one-off
+repository, and its `url` option is now optional.
+
+These ad-hoc sessions clone the default branch and let the agent decide what to
+do next. The bot doesn't pre-create a branch or open a pull request; the agent
+branches, commits, pushes, and opens a pull request as needed.
+
 The `/task` and `/close` commands and `@umbrella` mentions still work as
 explicit overrides; they are no longer required. See
 [Intent classification](#intent-classification).
@@ -146,6 +160,8 @@ the bot decides what to do. The classifier asks two questions:
 - a **choice** question for the intended action: `chat`, `create_task`, `reset`,
   `close`, or `ignore`
 
+`create_task` covers both GitHub issue/pull request URLs and requests that run
+against the server's configured repository (see [Discord usage](#discord-usage)).
 The bot acts without an explicit mention when the direction score and the
 action's confidence both clear `INTENT_CONFIDENCE_THRESHOLD` (default `0.6`);
 `reset` and `close` require a little more confidence because they destroy state.

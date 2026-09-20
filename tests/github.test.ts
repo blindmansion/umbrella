@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { findGitHubReference, parseGitHubUrl } from "../src/tasks/github";
+import {
+  findGitHubReference,
+  parseGitHubUrl,
+  parseRepoFullName,
+} from "../src/tasks/github";
 
 describe("findGitHubReference", () => {
   test("extracts an issue reference from surrounding text", () => {
@@ -41,5 +45,30 @@ describe("parseGitHubUrl", () => {
   test("rejects non-github hosts and protocols", () => {
     expect(parseGitHubUrl("http://github.com/owner/repo/issues/1")).toBeUndefined();
     expect(parseGitHubUrl("https://gitlab.com/owner/repo/issues/1")).toBeUndefined();
+  });
+});
+
+describe("parseRepoFullName", () => {
+  test("accepts an owner/name pair", () => {
+    expect(parseRepoFullName("blindmansion/umbrella")).toEqual({
+      owner: "blindmansion",
+      name: "umbrella",
+    });
+  });
+
+  test("trims surrounding whitespace", () => {
+    expect(parseRepoFullName("  owner/repo  ")).toEqual({
+      owner: "owner",
+      name: "repo",
+    });
+  });
+
+  test("rejects URLs and malformed values", () => {
+    expect(
+      parseRepoFullName("https://github.com/owner/repo"),
+    ).toBeUndefined();
+    expect(parseRepoFullName("owner")).toBeUndefined();
+    expect(parseRepoFullName("owner/repo/extra")).toBeUndefined();
+    expect(parseRepoFullName("")).toBeUndefined();
   });
 });

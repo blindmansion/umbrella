@@ -1,11 +1,13 @@
 import {
   Client,
+  ChannelType,
   Events,
   GatewayIntentBits,
   OAuth2Scopes,
   PermissionFlagsBits,
   type AnyThreadChannel,
   type Message,
+  type TextChannel,
 } from "discord.js";
 import { loadConfig } from "../config";
 import {
@@ -24,6 +26,7 @@ import { queueDepth, runExclusive } from "../sandbox/queue";
 import {
   clearSessionsForChannel,
   createSession,
+  getGuildRepo,
   getSession,
   getTask,
   initializeStore,
@@ -32,6 +35,7 @@ import {
 } from "../store";
 import {
   closeTaskWorkflow,
+  createTaskChannelForRepo,
   createTaskChannelFromReference,
   handleTaskInteraction,
   registerTaskCommands,
@@ -243,6 +247,7 @@ async function routeChannelMessage(
       action,
       reference,
       botWasMentioned,
+      prompt,
     });
     return;
   }
@@ -310,17 +315,36 @@ async function routeUntrackedChannel(
     action: IntentAction | undefined;
     reference: GitHubReference | undefined;
     botWasMentioned: boolean;
+    prompt: string;
   },
 ): Promise<void> {
-  const { action, reference, botWasMentioned } = options;
+  const { action, reference, botWasMentioned, prompt } = options;
   if (reference && (action === "create_task" || botWasMentioned)) {
     await createTaskFromMessage(message, reference);
     return;
   }
 
+  const wantsRepoTask =
+    !reference &&
+    prompt.length > 0 &&
+    (action === "create_task" || action === "chat");
+  if (wantsRepoTask && message.guild) {
+    const configured = await getGuildRepo(message.guild.id);
+    if (configured) {
+      await createRepoTaskFromMessage(message, configured.repo, prompt);
+      return;
+    }
+    if (botWasMentioned || action === "create_task") {
+      await message.reply(
+        "This server doesn't have a task repository yet. An admin can set one with `/repo set owner/name`, or share a GitHub issue or pull request URL.",
+      );
+      return;
+    }
+  }
+
   if (botWasMentioned) {
     await message.reply(
-      "This channel isn't an active task channel. Share a GitHub issue or pull request URL and I'll set one up.",
+      "This channel isn't an active task channel. Share a GitHub issue or pull request URL and I'll set one up, or ask an admin to set a default repository with `/repo set owner/name`.",
     );
   }
 }
@@ -363,6 +387,83 @@ async function createTaskFromMessage(
       await notice.edit(`Could not create the task: ${detail}`);
     }
   }
+}
+
+async function createRepoTaskFromMessage(
+  message: Message,
+  repo: string,
+  prompt: string,
+): Promise<void> {
+  const guild = message.guild;
+  if (!guild) return;
+
+  const notice = await message
+    .reply(`Setting up a task in ${repo}...`)
+    .catch((error) => {
+      console.error("Could not acknowledge task creation:", error);
+      return undefined;
+    });
+
+  try {
+    const { channel, provisioningError } = await createTaskChannelForRepo({
+      guild,
+      actorTag: message.author.tag,
+      repo,
+      prompt,
+      context: taskContext,
+    });
+    const summary = provisioningError
+      ? `Task channel created at ${channel}, but sandbox provisioning failed: ${provisioningError}`
+      : `Task ready: ${channel}`;
+    if (notice) {
+      await notice.edit(summary);
+    } else if ("send" in message.channel) {
+      await message.channel.send(summary).catch(() => undefined);
+    }
+
+    if (!provisioningError) {
+      await startTaskPrompt(channel, prompt, message.author.id).catch((error) => {
+        console.error("Could not start the task session:", error);
+        void channel
+          .send(
+            "I couldn't start your session. Mention me in the task channel to try again.",
+          )
+          .catch(() => undefined);
+      });
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    if (notice) {
+      await notice.edit(`Could not create the task: ${detail}`);
+    }
+  }
+}
+
+async function startTaskPrompt(
+  channel: TextChannel,
+  prompt: string,
+  createdBy: string,
+): Promise<void> {
+  const thread = await channel.threads.create({
+    name: createThreadName(prompt),
+    type: ChannelType.PublicThread,
+  });
+  await createSession({
+    threadId: thread.id,
+    channelId: channel.id,
+    openCodeSessionId: null,
+    createdBy,
+    createdAt: Date.now(),
+  });
+  const task = await getTask(channel.id);
+  if (task) await updateStatusMessage(client, task);
+
+  await runThreadPrompt({
+    thread,
+    channelId: channel.id,
+    prompt,
+    createdBy,
+  });
 }
 
 async function classifyAction(

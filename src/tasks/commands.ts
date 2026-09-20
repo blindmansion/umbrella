@@ -1,5 +1,6 @@
 import {
   ChannelType,
+  PermissionFlagsBits,
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type Client,
@@ -15,8 +16,11 @@ import { runExclusive } from "../sandbox/queue";
 import {
   clearSessionsForChannel,
   createTask,
+  getGuildRepo,
   getTask,
   listSessionsForChannel,
+  setGuildRepo,
+  clearGuildRepo,
   updateTask,
   type TaskKind,
   type TaskRecord,
@@ -24,8 +28,10 @@ import {
 import type { SandboxTracing } from "../tracing/phoenix";
 import {
   fetchGitHubMetadata,
+  fetchRepoDefaultBranch,
   inferBranch,
   parseGitHubUrl,
+  parseRepoFullName,
   type GitHubReference,
 } from "./github";
 import { createChannelName, slugify } from "./naming";
@@ -46,8 +52,15 @@ const taskCommand = new SlashCommandBuilder()
     option
       .setName("url")
       .setDescription("GitHub issue or pull request URL")
-      .setMaxLength(300)
-      .setRequired(true),
+      .setMaxLength(300),
+  )
+  .addStringOption((option) =>
+    option
+      .setName("repo")
+      .setDescription(
+        "Repository (owner/name) to use without an issue or pull request",
+      )
+      .setMaxLength(200),
   )
   .addStringOption((option) =>
     option
@@ -71,8 +84,37 @@ const closeCommand = new SlashCommandBuilder()
   .setName("close")
   .setDescription("Archive this task and destroy its sandbox");
 
+const repoCommand = new SlashCommandBuilder()
+  .setName("repo")
+  .setDescription("Show or set this server's default task repository")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .addSubcommand((sub) =>
+    sub.setName("show").setDescription("Show the current task repository"),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("set")
+      .setDescription("Set the repository used for requests without an issue")
+      .addStringOption((option) =>
+        option
+          .setName("repo")
+          .setDescription("Repository in owner/name form")
+          .setMaxLength(200)
+          .setRequired(true),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
+      .setName("clear")
+      .setDescription("Clear this server's default task repository"),
+  );
+
 export async function registerTaskCommands(guild: Guild): Promise<void> {
-  await guild.commands.set([taskCommand.toJSON(), closeCommand.toJSON()]);
+  await guild.commands.set([
+    taskCommand.toJSON(),
+    closeCommand.toJSON(),
+    repoCommand.toJSON(),
+  ]);
 }
 
 export async function handleTaskInteraction(
@@ -85,6 +127,10 @@ export async function handleTaskInteraction(
   }
   if (interaction.commandName === "close") {
     await closeTaskChannel(interaction, context.client);
+    return;
+  }
+  if (interaction.commandName === "repo") {
+    await handleRepoCommand(interaction);
   }
 }
 
@@ -119,9 +165,15 @@ async function createTaskChannel(
     return;
   }
 
-  const url = interaction.options.getString("url", true);
-  const reference = parseGitHubUrl(url);
-  if (!reference) {
+  const url = interaction.options.getString("url")?.trim();
+  const repoOption = interaction.options.getString("repo")?.trim();
+  const requestedKind = interaction.options.getString("kind") as
+    | TaskKind
+    | null;
+  const explicitBranch = interaction.options.getString("branch")?.trim();
+
+  const reference = url ? parseGitHubUrl(url) : undefined;
+  if (url && !reference) {
     await interaction.reply({
       content:
         "Use a GitHub issue or pull request URL like `https://github.com/owner/repo/issues/123` or `/pull/123`.",
@@ -129,37 +181,108 @@ async function createTaskChannel(
     });
     return;
   }
+  if (repoOption && !parseRepoFullName(repoOption)) {
+    await interaction.reply({
+      content: "The `repo` option must be in `owner/name` form.",
+      ephemeral: true,
+    });
+    return;
+  }
 
   await interaction.deferReply();
 
-  const requestedKind = interaction.options.getString("kind") as
-    | TaskKind
-    | null;
-  const kind =
-    requestedKind ?? (reference.urlKind === "pull" ? "review" : "feature");
-  const explicitBranch = interaction.options.getString("branch")?.trim();
-
   try {
-    const { channel, provisioningError } = await createTaskChannelFromReference({
-      guild: interaction.guild,
-      actorTag: interaction.user.tag,
-      reference,
-      kind,
-      explicitBranch,
-      context,
-    });
-    if (provisioningError) {
+    if (reference) {
+      const kind =
+        requestedKind ?? (reference.urlKind === "pull" ? "review" : "feature");
+      const { channel, provisioningError } =
+        await createTaskChannelFromReference({
+          guild: interaction.guild,
+          actorTag: interaction.user.tag,
+          reference,
+          kind,
+          explicitBranch,
+          context,
+        });
       await interaction.editReply(
-        `Task channel created at ${channel}, but sandbox provisioning failed: ${provisioningError}`,
+        provisioningError
+          ? `Task channel created at ${channel}, but sandbox provisioning failed: ${provisioningError}`
+          : `Task ready: ${channel}`,
       );
       return;
     }
-    await interaction.editReply(`Task ready: ${channel}`);
+
+    const repo =
+      repoOption ?? (await getGuildRepo(interaction.guild.id))?.repo;
+    if (!repo) {
+      await interaction.editReply(
+        "This server doesn't have a task repository yet. Set one with `/repo set owner/name`, pass the `repo` option, or share a GitHub issue or pull request URL.",
+      );
+      return;
+    }
+
+    const { channel, provisioningError } = await createTaskChannelForRepo({
+      guild: interaction.guild,
+      actorTag: interaction.user.tag,
+      repo,
+      kind: requestedKind ?? "planning",
+      explicitBranch,
+      context,
+    });
+    await interaction.editReply(
+      provisioningError
+        ? `Task channel created at ${channel}, but sandbox provisioning failed: ${provisioningError}`
+        : `Task ready: ${channel}`,
+    );
   } catch (error) {
     await interaction.editReply(
       `Could not create the task: ${sanitizeError(error, context)}`,
     );
   }
+}
+
+async function handleRepoCommand(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  if (!interaction.inCachedGuild()) {
+    await interaction.reply({
+      content: "`/repo` can only be used in a server.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const subcommand = interaction.options.getSubcommand();
+  if (subcommand === "set") {
+    const value = interaction.options.getString("repo", true).trim();
+    const parsed = parseRepoFullName(value);
+    if (!parsed) {
+      await interaction.reply({
+        content: "Use `owner/name`, for example `/repo set blindmansion/umbrella`.",
+        ephemeral: true,
+      });
+      return;
+    }
+    const repo = `${parsed.owner}/${parsed.name}`;
+    await setGuildRepo(interaction.guild.id, repo);
+    await interaction.reply(
+      `This server's task repository is now \`${repo}\`. Requests without a GitHub issue or pull request will run against it.`,
+    );
+    return;
+  }
+
+  if (subcommand === "clear") {
+    await clearGuildRepo(interaction.guild.id);
+    await interaction.reply("This server's task repository has been cleared.");
+    return;
+  }
+
+  const current = await getGuildRepo(interaction.guild.id);
+  await interaction.reply(
+    current
+      ? `This server's task repository is \`${current.repo}\`.`
+      : "No task repository is set. An admin can set one with `/repo set owner/name`.",
+  );
 }
 
 export type TaskProvisionResult = {
@@ -196,15 +319,76 @@ export async function createTaskChannelFromReference(options: {
     explicitBranch,
     metadata,
   });
-  const repo = `${reference.owner}/${reference.name}`;
 
-  const category = await findOrCreateRepoCategory(
+  return provisionTaskChannel({
     guild,
-    reference.owner,
-    reference.name,
+    actorTag,
+    context,
+    resolved: {
+      kind,
+      repo: `${reference.owner}/${reference.name}`,
+      refNumber: reference.number,
+      branch,
+      slug,
+    },
+  });
+}
+
+export async function createTaskChannelForRepo(options: {
+  guild: Guild;
+  actorTag: string;
+  repo: string;
+  kind?: TaskKind;
+  prompt?: string;
+  explicitBranch?: string;
+  context: TaskCommandContext;
+}): Promise<TaskProvisionResult> {
+  const { guild, actorTag, repo, prompt, explicitBranch, context } = options;
+  const parsed = parseRepoFullName(repo);
+  if (!parsed) {
+    throw new Error(`"${repo}" is not a valid owner/name repository.`);
+  }
+
+  const defaultBranch = await fetchRepoDefaultBranch(
+    parsed,
+    context.githubToken,
   );
+  const title = prompt?.trim() || "task";
+  const slug = slugify(title) || "task";
+
+  return provisionTaskChannel({
+    guild,
+    actorTag,
+    context,
+    resolved: {
+      kind: options.kind ?? "planning",
+      repo: `${parsed.owner}/${parsed.name}`,
+      refNumber: null,
+      branch: explicitBranch ?? defaultBranch ?? "main",
+      slug,
+    },
+  });
+}
+
+async function provisionTaskChannel(options: {
+  guild: Guild;
+  actorTag: string;
+  resolved: {
+    kind: TaskKind;
+    repo: string;
+    refNumber: number | null;
+    branch: string;
+    slug: string;
+  };
+  context: TaskCommandContext;
+}): Promise<TaskProvisionResult> {
+  const { guild, actorTag, resolved, context } = options;
+  const { kind, repo, refNumber, branch, slug } = resolved;
+
+  const [owner, name] = repo.split("/");
+  const category = await findOrCreateRepoCategory(guild, owner!, name!);
   const channel = await guild.channels.create({
-    name: createChannelName(kind, reference.number, slug),
+    name: createChannelName(kind, refNumber, slug),
     type: ChannelType.GuildText,
     parent: category.id,
     reason: `Task created by ${actorTag}`,
@@ -214,7 +398,7 @@ export async function createTaskChannelFromReference(options: {
     channelId: channel.id,
     kind,
     repo,
-    refNumber: reference.number,
+    refNumber,
     branch,
     sandboxId: null,
     status: "provisioning",
