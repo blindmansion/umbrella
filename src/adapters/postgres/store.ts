@@ -1,12 +1,15 @@
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
 import type {
   GuildRepoRecord,
+  MagicLinkRecord,
   SessionRecord,
   StateStore,
   TaskKind,
   TaskRecord,
   TaskStatus,
   TaskUpdate,
+  UserSecretRecord,
+  UserSettingsRecord,
 } from "../../core/ports";
 
 export type DatabasePool = {
@@ -29,6 +32,36 @@ type TaskRow = {
   status_message_id: string | null;
   model: string | null;
   context: string | null;
+  created_by: string | null;
+  created_at: number;
+};
+
+type UserSettingsRow = {
+  user_id: string;
+  user_name: string | null;
+  git_author_name: string | null;
+  git_author_email: string | null;
+  token_hint: string | null;
+  has_token: boolean;
+  created_at: number;
+  updated_at: number;
+};
+
+type UserSecretRow = {
+  user_id: string;
+  encrypted_token: string;
+  updated_at: number;
+};
+
+type MagicLinkRow = {
+  nonce: string;
+  guild_id: string;
+  guild_name: string | null;
+  user_id: string;
+  user_name: string | null;
+  is_admin: boolean;
+  expires_at: number;
+  consumed_at: number | null;
   created_at: number;
 };
 
@@ -93,12 +126,48 @@ export async function createStore(options: {
       created_at BIGINT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY,
+      user_name TEXT NULL,
+      git_author_name TEXT NULL,
+      git_author_email TEXT NULL,
+      token_hint TEXT NULL,
+      has_token BOOLEAN NOT NULL DEFAULT false,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS user_secrets (
+      user_id TEXT PRIMARY KEY REFERENCES user_settings(user_id) ON DELETE CASCADE,
+      encrypted_token TEXT NOT NULL,
+      updated_at BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS magic_links (
+      nonce TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      guild_name TEXT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NULL,
+      is_admin BOOLEAN NOT NULL,
+      expires_at BIGINT NOT NULL,
+      consumed_at BIGINT NULL,
+      created_at BIGINT NOT NULL
+    );
+
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS model TEXT NULL;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS context TEXT NULL;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by TEXT NULL;
     ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model TEXT NULL;
     ALTER TABLE sessions ADD COLUMN IF NOT EXISTS worktree_path TEXT NULL;
     ALTER TABLE sessions ADD COLUMN IF NOT EXISTS branch TEXT NULL;
   `);
+
+  // Electric needs full old-row data for updates/deletes. Not every Postgres
+  // (notably pg-mem in tests) supports this statement.
+  await database
+    .query("ALTER TABLE user_settings REPLICA IDENTITY FULL;")
+    .catch(() => undefined);
 
   return {
     async close() {
@@ -109,8 +178,8 @@ export async function createStore(options: {
       await database.query(
         `INSERT INTO tasks (
           channel_id, kind, repo, ref_number, branch, sandbox_id, status,
-          config_hash, status_message_id, model, context, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          config_hash, status_message_id, model, context, created_by, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
         [
           task.channelId,
           task.kind,
@@ -123,6 +192,7 @@ export async function createStore(options: {
           task.statusMessageId,
           task.model,
           task.context,
+          task.createdBy,
           task.createdAt,
         ],
       );
@@ -284,6 +354,117 @@ export async function createStore(options: {
     async clearGuildRepo(guildId) {
       await database.query("DELETE FROM guilds WHERE guild_id = $1", [guildId]);
     },
+
+    async getUserSettings(userId) {
+      const { rows } = await database.query<UserSettingsRow>(
+        "SELECT * FROM user_settings WHERE user_id = $1",
+        [userId],
+      );
+      return rows[0] ? userSettingsFromRow(rows[0]) : undefined;
+    },
+
+    async listUserSettings() {
+      const { rows } = await database.query<UserSettingsRow>(
+        "SELECT * FROM user_settings ORDER BY user_id",
+      );
+      return rows.map(userSettingsFromRow);
+    },
+
+    async upsertUserSettings(userId, update) {
+      const encryptedToken = update.encryptedToken;
+      const { rows } = await database.query<UserSettingsRow>(
+        `INSERT INTO user_settings (
+          user_id, user_name, git_author_name, git_author_email, token_hint,
+          has_token, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        ON CONFLICT (user_id) DO UPDATE SET
+          user_name = COALESCE(EXCLUDED.user_name, user_settings.user_name),
+          git_author_name = COALESCE(EXCLUDED.git_author_name, user_settings.git_author_name),
+          git_author_email = COALESCE(EXCLUDED.git_author_email, user_settings.git_author_email),
+          token_hint = COALESCE(EXCLUDED.token_hint, user_settings.token_hint),
+          has_token = CASE
+            WHEN $8 THEN true
+            WHEN $9 THEN false
+            ELSE user_settings.has_token
+          END,
+          updated_at = EXCLUDED.updated_at
+        RETURNING *`,
+        [
+          userId,
+          update.userName ?? null,
+          update.gitAuthorName ?? null,
+          update.gitAuthorEmail ?? null,
+          update.tokenHint ?? null,
+          encryptedToken !== undefined && encryptedToken !== null,
+          update.updatedAt,
+          encryptedToken !== undefined && encryptedToken !== null,
+          encryptedToken === null,
+        ],
+      );
+      if (encryptedToken !== undefined) {
+        if (encryptedToken === null) {
+          await database.query("DELETE FROM user_secrets WHERE user_id = $1", [
+            userId,
+          ]);
+        } else {
+          await database.query(
+            `INSERT INTO user_secrets (user_id, encrypted_token, updated_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id) DO UPDATE SET
+               encrypted_token = EXCLUDED.encrypted_token,
+               updated_at = EXCLUDED.updated_at`,
+            [userId, encryptedToken, update.updatedAt],
+          );
+        }
+      }
+      return userSettingsFromRow(rows[0]!);
+    },
+
+    async getUserSecret(userId) {
+      const { rows } = await database.query<UserSecretRow>(
+        "SELECT * FROM user_secrets WHERE user_id = $1",
+        [userId],
+      );
+      return rows[0] ? userSecretFromRow(rows[0]) : undefined;
+    },
+
+    async createMagicLink(link) {
+      await database.query(
+        `INSERT INTO magic_links (
+          nonce, guild_id, guild_name, user_id, user_name, is_admin,
+          expires_at, consumed_at, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8)
+        ON CONFLICT (nonce) DO NOTHING`,
+        [
+          link.nonce,
+          link.guildId,
+          link.guildName,
+          link.userId,
+          link.userName,
+          link.isAdmin,
+          link.expiresAt,
+          link.createdAt,
+        ],
+      );
+    },
+
+    async consumeMagicLink(nonce, now) {
+      const { rows } = await database.query<MagicLinkRow>(
+        `UPDATE magic_links
+         SET consumed_at = $2
+         WHERE nonce = $1 AND consumed_at IS NULL AND expires_at > $2
+         RETURNING *`,
+        [nonce, now],
+      );
+      return rows[0] ? magicLinkFromRow(rows[0]) : undefined;
+    },
+
+    async deleteExpiredMagicLinks(now) {
+      await database.query(
+        "DELETE FROM magic_links WHERE expires_at <= $1 OR consumed_at IS NOT NULL",
+        [now],
+      );
+    },
   };
 }
 
@@ -300,6 +481,42 @@ function taskFromRow(row: TaskRow): TaskRecord {
     statusMessageId: row.status_message_id,
     model: row.model,
     context: row.context,
+    createdBy: row.created_by,
+    createdAt: Number(row.created_at),
+  };
+}
+
+function userSettingsFromRow(row: UserSettingsRow): UserSettingsRecord {
+  return {
+    userId: row.user_id,
+    userName: row.user_name,
+    gitAuthorName: row.git_author_name,
+    gitAuthorEmail: row.git_author_email,
+    tokenHint: row.token_hint,
+    hasToken: row.has_token,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function userSecretFromRow(row: UserSecretRow): UserSecretRecord {
+  return {
+    userId: row.user_id,
+    encryptedToken: row.encrypted_token,
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function magicLinkFromRow(row: MagicLinkRow): MagicLinkRecord {
+  return {
+    nonce: row.nonce,
+    guildId: row.guild_id,
+    guildName: row.guild_name,
+    userId: row.user_id,
+    userName: row.user_name,
+    isAdmin: row.is_admin,
+    expiresAt: Number(row.expires_at),
+    consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
     createdAt: Number(row.created_at),
   };
 }

@@ -2,8 +2,10 @@ import { installSandboxAgentInstructions } from "./agents";
 import { listOpenCodeModels } from "./opencode";
 import type {
   CoreConfig,
+  CredentialResolver,
   SandboxHandle,
   SandboxProvider,
+  SandboxUserConfig,
   SessionRecord,
   TaskRecord,
 } from "./ports";
@@ -26,6 +28,8 @@ export type SandboxResolution = {
   rebuilt: boolean;
   /** The sandbox was booted from a checkpoint, so its OpenCode sessions remain valid. */
   restored: boolean;
+  /** The effective configuration hash the sandbox was built with. */
+  configHash: string;
 };
 
 /** Environment-scoped checkpoint name. Task channels are unique, so one each. */
@@ -41,6 +45,7 @@ export class SandboxManager {
   constructor(
     private readonly provider: SandboxProvider,
     private readonly config: CoreConfig,
+    private readonly resolveCredentials?: CredentialResolver,
   ) {}
 
   async getOrCreate(options: {
@@ -49,11 +54,15 @@ export class SandboxManager {
     onRebuild?: () => void | Promise<void>;
   }): Promise<SandboxResolution> {
     const { task, guildName, onRebuild } = options;
+    const userConfig = await this.resolveCredentials?.(task);
+    const configHash = effectiveConfigHash(this.config.configHash, userConfig);
+    const env = sandboxEnvFor(this.config, userConfig);
+    const token = userConfig?.githubToken ?? this.config.githubToken;
     const cached = this.live.get(task.channelId);
-    const matches = task.configHash === this.config.configHash;
+    const matches = task.configHash === configHash;
 
     if (cached && matches && task.sandboxId === cached.id) {
-      return { sandbox: cached, rebuilt: false, restored: false };
+      return { sandbox: cached, rebuilt: false, restored: false, configHash };
     }
 
     if (!matches) {
@@ -73,23 +82,25 @@ export class SandboxManager {
       }
       if (task.sandboxId) {
         const connected = await this.connect(task.channelId, task.sandboxId);
-        if (connected) return { sandbox: connected, rebuilt: false, restored: false };
+        if (connected) {
+          return { sandbox: connected, rebuilt: false, restored: false, configHash };
+        }
       }
-      const restored = await this.restoreFromCheckpoint(task.channelId);
+      const restored = await this.restoreFromCheckpoint(task.channelId, env);
       if (restored) {
         this.live.set(task.channelId, restored);
         this.clearModelCache(task.channelId);
-        return { sandbox: restored, rebuilt: false, restored: true };
+        return { sandbox: restored, rebuilt: false, restored: true, configHash };
       }
     }
 
     const sandbox = await this.provider.create({
       idleTimeoutMinutes: SANDBOX_IDLE_TIMEOUT_MINUTES,
-      env: this.config.sandboxEnv,
+      env,
       networkIsolation: this.config.networkIsolation,
     });
     try {
-      await this.bootstrap(sandbox, task, guildName);
+      await this.bootstrap(sandbox, task, guildName, token);
       await this.captureCheckpoint(sandbox, task.channelId);
     } catch (error) {
       await sandbox.destroy().catch(() => undefined);
@@ -99,7 +110,7 @@ export class SandboxManager {
     this.live.set(task.channelId, sandbox);
     this.clearModelCache(task.channelId);
     await onRebuild?.();
-    return { sandbox, rebuilt: true, restored: false };
+    return { sandbox, rebuilt: true, restored: false, configHash };
   }
 
   async getExisting(
@@ -212,12 +223,13 @@ export class SandboxManager {
 
   private async restoreFromCheckpoint(
     channelId: string,
+    env: Record<string, string>,
   ): Promise<SandboxHandle | undefined> {
     const name = checkpointNameForChannel(channelId);
     try {
       const sandbox = await this.provider.restore(name, {
         idleTimeoutMinutes: SANDBOX_IDLE_TIMEOUT_MINUTES,
-        env: this.config.sandboxEnv,
+        env,
         networkIsolation: this.config.networkIsolation,
       });
       console.log(
@@ -282,9 +294,9 @@ export class SandboxManager {
   private async bootstrap(
     sandbox: SandboxHandle,
     task: TaskRecord,
-    guildName?: string,
+    guildName: string | undefined,
+    token: string | undefined,
   ): Promise<void> {
-    const token = this.config.githubToken;
     const cloneUrl = token
       ? `https://x-access-token:${encodeURIComponent(token)}@github.com/${task.repo}.git`
       : `https://github.com/${task.repo}.git`;
@@ -393,4 +405,37 @@ export class SandboxManager {
       );
     }
   }
+}
+
+/**
+ * The user's stored configuration augments the deployment-wide sandbox
+ * environment. A newer `version` forces a rebuild so a changed token or git
+ * author takes effect on the next prompt.
+ */
+export function effectiveConfigHash(
+  baseHash: string,
+  userConfig: SandboxUserConfig | undefined,
+): string {
+  return userConfig ? `${baseHash}:u${userConfig.version}` : baseHash;
+}
+
+export function sandboxEnvFor(
+  config: CoreConfig,
+  userConfig: SandboxUserConfig | undefined,
+): Record<string, string> {
+  const env = { ...config.sandboxEnv };
+  if (!userConfig) return env;
+  if (userConfig.githubToken) {
+    env.GITHUB_TOKEN = userConfig.githubToken;
+    env.GH_TOKEN = userConfig.githubToken;
+  }
+  if (userConfig.gitAuthorName) {
+    env.GIT_AUTHOR_NAME = userConfig.gitAuthorName;
+    env.GIT_COMMITTER_NAME = userConfig.gitAuthorName;
+  }
+  if (userConfig.gitAuthorEmail) {
+    env.GIT_AUTHOR_EMAIL = userConfig.gitAuthorEmail;
+    env.GIT_COMMITTER_EMAIL = userConfig.gitAuthorEmail;
+  }
+  return env;
 }

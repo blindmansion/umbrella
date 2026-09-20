@@ -9,6 +9,8 @@ Umbrella is developed on Railway. The repository defines the complete
 production stack as code:
 
 - the Umbrella bot, built with `Dockerfile.bot`
+- the configuration dashboard, built with `Dockerfile.dashboard`
+- an Electric sync service that streams dashboard data out of Postgres
 - Arize Phoenix, built with `Dockerfile.phoenix`
 - separate managed PostgreSQL databases for Umbrella and Phoenix
 - GitHub sources pinned to `main`, so merges redeploy the running instance
@@ -213,6 +215,83 @@ explicit overrides; they are no longer required. See
 The Discord invite needs the `bot` and `applications.commands` scopes plus View
 Channel, Send Messages, Read Message History, Create Public Threads, Send
 Messages in Threads, Manage Channels, and Manage Messages permissions.
+
+## Configuration dashboard
+
+`/configure` in any server sends the requesting user an ephemeral, single-use
+link to the Umbrella web dashboard. The link is a signed token carrying the
+user's identity, their Discord server, and whether they can manage it; the
+nonce behind it is stored server-side, so it is consumed by a single click and
+expires after five minutes. Clicking it exchanges the token for an
+`HttpOnly` session cookie scoped to that user and server — there is no second
+login step.
+
+The dashboard is a React single-page app served by its own service. It
+configures the per-user git author name, git author email, and GitHub personal
+access token Umbrella uses for that user's sandboxes. The token is encrypted at
+rest with AES-256-GCM using a key derived from `DASHBOARD_SECRET`; the UI and
+the sync stream only ever carry a `••••1234` hint. Members see and edit their
+own configuration; server managers additionally see a read-only summary of
+everyone's.
+
+Once the dashboard is deployed, its per-user configuration is required: a
+`/task` from a user who has not set a Git author name, Git author email, and
+GitHub token is refused with a pointer to `/configure`, and the global
+`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, and `GITHUB_TOKEN` are no longer used.
+Without `DASHBOARD_URL` and `DASHBOARD_SECRET` the dashboard stays disabled and
+those globals remain the fallback, so a deployment can adopt it gradually.
+
+The values are used the next time that user's task sandbox is built. Changing
+them bumps the sandbox's effective config hash, so a changed token or identity
+rebuilds the sandbox on its next prompt.
+
+### How the pieces fit
+
+Configuration lives in the same PostgreSQL database as task state. The
+dashboard does not poll it: an [Electric](https://electric-sql.com) service
+replicates the `user_settings` table over HTTP, and the dashboard consumes it
+with [TanStack DB](https://tanstack.com/db). Writes go back through the
+dashboard's API, which returns the PostgreSQL transaction id so the optimistic
+row is reconciled with the sync stream. Electric is read-only and is never
+exposed directly — the dashboard proxies every shape request, setting the
+table, columns, and row filter server-side so a client cannot widen its own
+access, and it holds `ELECTRIC_SECRET` so clients never see it.
+
+### Deploying the dashboard
+
+The Railway plan adds `dashboard` and `electric` services next to the bot. Set
+the shared secret on both the bot and the dashboard:
+
+```bash
+railway variable set DASHBOARD_SECRET="$(openssl rand -hex 32)" --service umbrella
+railway variable set ELECTRIC_SECRET="$(openssl rand -hex 32)" --service electric
+railway variable set DASHBOARD_SECRET="<same value>" ELECTRIC_SECRET="<same value>" --service dashboard
+```
+
+Generate a public domain for the `dashboard` service in Railway's Networking
+settings, then tell the bot where it is:
+
+```bash
+railway variable set DASHBOARD_URL="https://<your-dashboard-domain>" --service umbrella
+```
+
+Electric uses PostgreSQL logical replication, so the database must run with
+`wal_level=logical` and the connection role must have `REPLICATION`. Electric
+creates its publication and replication slot automatically. Its shape logs live
+on a persistent volume at `/var/lib/electric/persistent`, which must survive
+restarts.
+
+To run the dashboard locally against the same database:
+
+```bash
+cd dashboard
+DATABASE_URL=... DASHBOARD_SECRET=... ELECTRIC_URL=http://localhost:3000 \
+  bun run dev:server &
+bun run dev
+```
+
+The Vite dev server proxies `/api` and `/auth` to the dashboard server on
+`DASHBOARD_PORT` (default `8787`).
 
 ## Intent classification
 

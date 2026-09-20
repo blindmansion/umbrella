@@ -20,6 +20,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
     statusMessageId: null,
     model: null,
     context: null,
+    createdBy: null,
     createdAt: 1,
     ...overrides,
   };
@@ -90,6 +91,7 @@ describe("SandboxManager", () => {
       sandbox: created,
       rebuilt: true,
       restored: false,
+      configHash: "hash",
     });
     expect(created.commands.some((command) => command.startsWith("git clone"))).toBe(true);
   });

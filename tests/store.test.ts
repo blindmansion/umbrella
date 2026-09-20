@@ -31,6 +31,7 @@ function task(
     statusMessageId: null,
     model: null,
     context: null,
+    createdBy: null,
     createdAt: 1_700_000_000_000,
     ...overrides,
   };
@@ -206,6 +207,66 @@ describe("state store", () => {
     expect(sessions.every((entry) => entry.openCodeSessionId === null)).toBe(
       true,
     );
+    await store.close();
+  });
+
+  test("stores per-user settings and encrypted secrets", async () => {
+    const store = await createTestStore();
+
+    const created = await store.upsertUserSettings("user-1", {
+      userName: "alice",
+      gitAuthorName: "Alice",
+      gitAuthorEmail: "alice@example.com",
+      encryptedToken: "sealed-token",
+      tokenHint: "••••1234",
+      updatedAt: 1_000,
+    });
+    expect(created.hasToken).toBe(true);
+    expect(created.tokenHint).toBe("••••1234");
+    expect(await store.getUserSecret("user-1")).toMatchObject({
+      encryptedToken: "sealed-token",
+    });
+
+    const updated = await store.upsertUserSettings("user-1", {
+      gitAuthorName: "Alice B",
+      updatedAt: 2_000,
+    });
+    expect(updated.gitAuthorName).toBe("Alice B");
+    expect(updated.hasToken).toBe(true);
+    expect(updated.createdAt).toBe(1_000);
+    expect(updated.updatedAt).toBe(2_000);
+
+    const cleared = await store.upsertUserSettings("user-1", {
+      encryptedToken: null,
+      updatedAt: 3_000,
+    });
+    expect(cleared.hasToken).toBe(false);
+    expect(await store.getUserSecret("user-1")).toBeUndefined();
+
+    await store.close();
+  });
+
+  test("consumes a magic link exactly once and expires it", async () => {
+    const store = await createTestStore();
+    const link = {
+      guildId: "guild-1",
+      guildName: "Umbrella HQ",
+      userId: "user-1",
+      userName: "alice",
+      isAdmin: false,
+      expiresAt: 1_000,
+      consumedAt: null,
+      createdAt: 0,
+    };
+
+    await store.createMagicLink({ ...link, nonce: "once" });
+    expect((await store.consumeMagicLink("once", 500))?.nonce).toBe("once");
+    expect(await store.consumeMagicLink("once", 500)).toBeUndefined();
+
+    await store.createMagicLink({ ...link, nonce: "expired" });
+    expect(await store.consumeMagicLink("expired", 2_000)).toBeUndefined();
+
+    expect(await store.consumeMagicLink("missing", 500)).toBeUndefined();
     await store.close();
   });
 

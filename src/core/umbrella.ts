@@ -4,6 +4,11 @@ import type {
   Deps,
   IncomingMessage,
 } from "./ports";
+import {
+  configureMessage,
+  createConfigureLink,
+  hasCompleteUserConfig,
+} from "./dashboard";
 import { findGitHubReference, parseRepoFullName } from "./github";
 import { runThreadPrompt } from "./prompts";
 import {
@@ -24,7 +29,11 @@ import { SandboxManager } from "./sandboxes";
 import { sanitizeError } from "./utils";
 
 export function createUmbrella(deps: Deps) {
-  const manager = new SandboxManager(deps.sandboxes, deps.config);
+  const manager = new SandboxManager(
+    deps.sandboxes,
+    deps.config,
+    deps.credentials,
+  );
   const queue = new ChannelQueue();
   const inFlight = new Set<string>();
 
@@ -296,6 +305,16 @@ export function createUmbrella(deps: Deps) {
   async function onCommand(command: Command): Promise<CommandResult> {
     try {
       if (command.type === "task") {
+        if (
+          deps.config.dashboard &&
+          !(await hasCompleteUserConfig(deps.store, command.actorId))
+        ) {
+          return {
+            ok: false,
+            message:
+              "Before your first task, set your Git author name, Git author email, and GitHub token in the Umbrella dashboard. Run /configure to get a one-time sign-in link.",
+          };
+        }
         const result = await provisionFromCommand(
           deps,
           manager,
@@ -357,6 +376,30 @@ export function createUmbrella(deps: Deps) {
             ? `This server's task repository is \`${current.repo}\`.`
             : "No task repository is set. An admin can set one with `/repo set owner/name`.",
         };
+      }
+
+      if (command.type === "configure") {
+        const dashboard = deps.config.dashboard;
+        if (!dashboard) {
+          return {
+            ok: false,
+            message:
+              "The web dashboard isn't configured on this deployment. An admin can set it up by configuring DASHBOARD_URL and DASHBOARD_SECRET.",
+          };
+        }
+        const url = await createConfigureLink(
+          deps.store,
+          dashboard,
+          {
+            guildId: command.guildId,
+            guildName: command.guildName,
+            userId: command.userId,
+            userName: command.userName,
+            isAdmin: command.isAdmin,
+          },
+          deps.clock,
+        );
+        return { ok: true, message: configureMessage(url) };
       }
 
       const model = command.model?.replace(/[\u0000-\u001f\u007f]/g, "").trim();

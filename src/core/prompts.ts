@@ -204,7 +204,7 @@ async function prepareThreadWorkspace(options: {
   const task = await deps.store.getTask(channelId);
   if (!task || task.status === "archived") return undefined;
 
-  const { sandbox, rebuilt } = await manager.getOrCreate({
+  const { sandbox, rebuilt, configHash } = await manager.getOrCreate({
     task,
     guildName,
     onRebuild: async () => {
@@ -217,13 +217,10 @@ async function prepareThreadWorkspace(options: {
       if (rebuiltTask) await updateStatusMessage(deps, rebuiltTask);
     },
   });
-  if (
-    sandbox.id !== task.sandboxId ||
-    task.configHash !== deps.config.configHash
-  ) {
+  if (sandbox.id !== task.sandboxId || task.configHash !== configHash) {
     const ready = await deps.store.updateTask(channelId, {
       sandboxId: sandbox.id,
-      configHash: deps.config.configHash,
+      configHash,
       status: "ready",
     });
     if (ready) await updateStatusMessage(deps, ready);

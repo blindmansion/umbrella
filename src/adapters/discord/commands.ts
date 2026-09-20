@@ -94,6 +94,9 @@ const definitions = [
     .addSubcommand((sub) =>
       sub.setName("clear").setDescription("Clear the repository"),
     ),
+  new SlashCommandBuilder()
+    .setName("configure")
+    .setDescription("Get a one-time link to the Umbrella web dashboard"),
 ];
 
 export async function registerCommands(guild: Guild): Promise<void> {
@@ -161,6 +164,17 @@ export async function handleCommand(
         : interaction.channelId,
       threadId,
       model: interaction.options.getString("model")?.trim(),
+    };
+  } else if (interaction.commandName === "configure") {
+    command = {
+      type: "configure",
+      guildId: interaction.guild.id,
+      guildName: interaction.guild.name,
+      userId: interaction.user.id,
+      userName: interaction.user.username,
+      isAdmin:
+        interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ??
+        false,
     };
   } else {
     const action = interaction.options.getSubcommand() as "show" | "set" | "clear";

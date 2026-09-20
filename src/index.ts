@@ -4,11 +4,16 @@ import { railwaySandboxProvider } from "./adapters/railway/sandboxes";
 import { createStore } from "./adapters/postgres/store";
 import { createIntentClassifier } from "./adapters/typesafe/classifier";
 import { loadConfig } from "./config";
+import { createCredentialResolver } from "./core/credentials";
 import { createUmbrella } from "./core/umbrella";
 
 const config = loadConfig();
 const store = await createStore();
 const github = createGitHubClient(config.githubToken);
+const credentials = createCredentialResolver(
+  store,
+  config.dashboard?.secret,
+);
 
 await startBot({
   token: config.token,
@@ -28,5 +33,6 @@ await startBot({
         : undefined,
       github,
       config,
+      credentials,
     }),
 });

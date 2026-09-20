@@ -1,8 +1,9 @@
 # Railway infrastructure
 
 `.railway/railway.ts` is the source of truth for the production project. It
-defines the Umbrella bot, Phoenix, and a separate managed PostgreSQL database
-for each service.
+defines the Umbrella bot, the configuration dashboard, the Electric sync
+service, Phoenix, and a separate managed PostgreSQL database for each
+application service.
 
 Preview changes with `bun run railway:plan`. Apply only after reviewing that
 plan with `bun run railway:apply`. Railway deploys both source services from

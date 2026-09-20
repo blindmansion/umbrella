@@ -142,6 +142,52 @@ describe("createUmbrella", () => {
     expect(sent.some(({ text }) => text.includes("Task ready"))).toBe(true);
   });
 
+  test("refuses a task until the user configures the dashboard", async () => {
+    const store = createMemoryStore(() => 123);
+    const { chat, sent } = fakeChat();
+    const runtime = createUmbrella({
+      store,
+      chat,
+      sandboxes: fakeSandboxes(),
+      github: {
+        async fetchMetadata() {
+          return { title: "Fix the bug", defaultBranch: "main" };
+        },
+        async fetchDefaultBranch() {
+          return "main";
+        },
+        async fetchOpenIssues() {
+          return [];
+        },
+        async fetchReferenceState() {
+          return { state: "open", merged: false };
+        },
+      },
+      config: {
+        model: "test/model",
+        sandboxEnv: {},
+        configHash: "hash",
+        dashboard: { url: "https://dash.example.com", secret: "secret" },
+      },
+      clock: () => 123,
+    });
+
+    await runtime.onMessage(message);
+
+    expect(await store.listActiveTasks()).toHaveLength(0);
+    expect(sent.some(({ text }) => text.includes("/configure"))).toBe(true);
+
+    await store.upsertUserSettings("user-1", {
+      gitAuthorName: "Alice",
+      gitAuthorEmail: "alice@example.com",
+      encryptedToken: "sealed",
+      tokenHint: "••••cret",
+      updatedAt: 1,
+    });
+    await runtime.onMessage(message);
+    expect(await store.listActiveTasks()).toHaveLength(1);
+  });
+
   test("creates a per-thread worktree and localizes the session cwd", async () => {
     const store = createMemoryStore(() => 123);
     const { chat } = fakeChat();

@@ -128,6 +128,7 @@ async function provisionResolved(
     statusMessageId: null,
     model: null,
     context: resolved.context,
+    createdBy: command.actorId,
     createdAt: (deps.clock ?? Date.now)(),
   };
   await deps.store.createTask(task);
@@ -143,13 +144,13 @@ async function provisionResolved(
   let provisioningError: string | undefined;
   try {
     await queue.runExclusive(channelId, async () => {
-      const { sandbox } = await manager.getOrCreate({
+      const { sandbox, configHash } = await manager.getOrCreate({
         task: withStatus,
         guildName: command.guildName,
       });
       const ready = await deps.store.updateTask(channelId, {
         sandboxId: sandbox.id,
-        configHash: deps.config.configHash,
+        configHash,
         status: "ready",
       });
       if (ready) await updateStatusMessage(deps, ready);

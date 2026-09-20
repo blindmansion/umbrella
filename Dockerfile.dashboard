@@ -1,0 +1,24 @@
+FROM oven/bun:1-alpine AS build
+
+WORKDIR /app
+COPY dashboard/package.json dashboard/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY dashboard/ ./
+RUN bun run build
+
+FROM oven/bun:1-alpine
+
+WORKDIR /app
+ENV NODE_ENV=production
+# Raise Bun's per-process fetch cap so the Electric proxy does not silently
+# queue upstream shape requests under concurrency.
+ENV BUN_CONFIG_MAX_HTTP_REQUESTS=4096
+
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY dashboard/server ./server
+COPY dashboard/package.json ./
+COPY shared /shared
+
+USER bun
+CMD ["bun", "run", "server/index.ts"]
