@@ -149,6 +149,13 @@ These ad-hoc sessions clone the default branch and let the agent decide what to
 do next. The bot doesn't pre-create a branch or open a pull request; the agent
 branches, commits, pushes, and opens a pull request as needed.
 
+Each new session starts with the task's context prepended to its first prompt:
+the GitHub issue or pull request title and description, its URL, and the task
+branch (or, for repository tasks, the repository and the request that started
+the task). Threads in a task channel therefore don't need to restate which issue
+they're working on. Reset a thread to start a fresh session, which reintroduces
+the same context.
+
 The `/task` and `/close` commands and `@umbrella` mentions still work as
 explicit overrides; they are no longer required. See
 [Intent classification](#intent-classification).

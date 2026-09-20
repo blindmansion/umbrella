@@ -32,6 +32,10 @@ import {
 } from "../store";
 import type { SandboxTracing } from "../tracing/phoenix";
 import {
+  buildReferenceContext,
+  buildRepoContext,
+} from "./context";
+import {
   fetchGitHubMetadata,
   fetchRepoDefaultBranch,
   inferBranch,
@@ -523,6 +527,14 @@ export async function createTaskChannelFromReference(options: {
       refNumber: reference.number,
       branch,
       slug,
+      context: buildReferenceContext({
+        kind,
+        repo: `${reference.owner}/${reference.name}`,
+        refNumber: reference.number,
+        branch,
+        reference,
+        metadata,
+      }),
     },
   });
 }
@@ -536,10 +548,11 @@ export async function createTaskChannelForRepo(options: {
   explicitBranch?: string;
   context: TaskCommandContext;
 }): Promise<TaskProvisionResult> {
-  const { guild, actorTag, repo, prompt, explicitBranch, context } = options;
-  const parsed = parseRepoFullName(repo);
+  const { guild, actorTag, repo: repoInput, prompt, explicitBranch, context } =
+    options;
+  const parsed = parseRepoFullName(repoInput);
   if (!parsed) {
-    throw new Error(`"${repo}" is not a valid owner/name repository.`);
+    throw new Error(`"${repoInput}" is not a valid owner/name repository.`);
   }
 
   const defaultBranch = await fetchRepoDefaultBranch(
@@ -548,17 +561,21 @@ export async function createTaskChannelForRepo(options: {
   );
   const title = prompt?.trim() || "task";
   const slug = slugify(title) || "task";
+  const kind = options.kind ?? "planning";
+  const branch = explicitBranch ?? defaultBranch ?? "main";
+  const repo = `${parsed.owner}/${parsed.name}`;
 
   return provisionTaskChannel({
     guild,
     actorTag,
     context,
     resolved: {
-      kind: options.kind ?? "planning",
-      repo: `${parsed.owner}/${parsed.name}`,
+      kind,
+      repo,
       refNumber: null,
-      branch: explicitBranch ?? defaultBranch ?? "main",
+      branch,
       slug,
+      context: buildRepoContext({ kind, repo, branch, request: prompt }),
     },
   });
 }
@@ -572,11 +589,12 @@ async function provisionTaskChannel(options: {
     refNumber: number | null;
     branch: string;
     slug: string;
+    context?: string | null;
   };
   context: TaskCommandContext;
 }): Promise<TaskProvisionResult> {
   const { guild, actorTag, resolved, context } = options;
-  const { kind, repo, refNumber, branch, slug } = resolved;
+  const { kind, repo, refNumber, branch, slug, context: taskContext } = resolved;
 
   const [owner, name] = repo.split("/");
   const category = await findOrCreateRepoCategory(guild, owner!, name!);
@@ -598,6 +616,7 @@ async function provisionTaskChannel(options: {
     configHash: null,
     statusMessageId: null,
     model: null,
+    context: taskContext ?? null,
     createdAt: Date.now(),
   };
   await createTask(task);
