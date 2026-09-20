@@ -82,6 +82,7 @@ describe("buildIntentQuestions", () => {
       "create_task",
       "reset",
       "close",
+      "done",
       "ignore",
     ]);
   });

@@ -34,6 +34,7 @@ export default defineRailway(() => {
       TYPESAFE_API_KEY: preserve(),
       TYPESAFE_MODEL: preserve(),
       INTENT_CONFIDENCE_THRESHOLD: preserve(),
+      TASK_RECONCILE_INTERVAL_MINUTES: preserve(),
       PHOENIX_ENDPOINT: "http://phoenix.railway.internal:6006",
       PHOENIX_API_KEY: preserve(),
       PHOENIX_LOG_CONTENT: preserve(),

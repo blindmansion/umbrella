@@ -31,6 +31,7 @@ function fakeChat() {
       return `task-${++sequence}`;
     },
     async archiveThreads() {},
+    async archiveChannel() {},
     async recentTurns() {
       return [];
     },
@@ -114,6 +115,9 @@ describe("createUmbrella", () => {
         async fetchOpenIssues() {
           return [];
         },
+        async fetchReferenceState() {
+          return { state: "open", merged: false };
+        },
       },
       config: {
         model: "test/model",
@@ -189,6 +193,9 @@ describe("createUmbrella", () => {
         },
         async fetchOpenIssues() {
           return [];
+        },
+        async fetchReferenceState() {
+          return { state: "open", merged: false };
         },
       },
       config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },
@@ -288,6 +295,9 @@ describe("createUmbrella", () => {
         async fetchOpenIssues() {
           return [];
         },
+        async fetchReferenceState() {
+          return { state: "open", merged: false };
+        },
       },
       config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },
       clock: () => 123,
@@ -378,6 +388,9 @@ describe("createUmbrella", () => {
         async fetchOpenIssues() {
           return [];
         },
+        async fetchReferenceState() {
+          return { state: "open", merged: false };
+        },
       },
       config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },
       clock: () => 123,
@@ -429,6 +442,9 @@ describe("createUmbrella", () => {
         },
         async fetchOpenIssues() {
           return [];
+        },
+        async fetchReferenceState() {
+          return { state: "open" as const, merged: false };
         },
       },
       config: { model: "test/model", sandboxEnv: {}, configHash: "hash" },

@@ -14,6 +14,7 @@ import type {
   IncomingMessage,
   StateStore,
 } from "../../core/ports";
+import { scheduleMaintenance } from "../../core/scheduler";
 import { DiscordChatPlatform } from "./chat";
 import {
   handleAutocomplete,
@@ -25,6 +26,7 @@ type Runtime = {
   onMessage(message: IncomingMessage): Promise<void>;
   onCommand(command: Command): Promise<CommandResult>;
   getAvailableModels(channelId: string): Promise<string[]>;
+  runMaintenance?(): Promise<unknown>;
 };
 
 export async function startBot(options: {
@@ -33,6 +35,7 @@ export async function startBot(options: {
   github: GitHubClient;
   config: CoreConfig & {
     intent?: { model: string; confidenceThreshold: number };
+    reconcileIntervalMinutes?: number;
   };
   createRuntime(chat: DiscordChatPlatform): Runtime;
 }): Promise<Client> {
@@ -87,6 +90,19 @@ export async function startBot(options: {
         ],
       })}`,
     );
+    const intervalMinutes = options.config.reconcileIntervalMinutes ?? 0;
+    if (intervalMinutes > 0 && runtime.runMaintenance) {
+      const maintenance = scheduleMaintenance({
+        intervalMs: intervalMinutes * 60_000,
+        run: runtime.runMaintenance,
+        onError: (error) =>
+          console.error("Task maintenance pass failed:", error),
+      });
+      console.log(
+        `Task maintenance enabled: checking for closed issue references every ${intervalMinutes} minute(s).`,
+      );
+      void maintenance.runNow();
+    }
   });
 
   client.on(Events.GuildCreate, (guild) => {

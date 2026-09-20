@@ -91,6 +91,20 @@ export class DiscordChatPlatform implements ChatPlatform {
     );
   }
 
+  async archiveChannel(channelId: string): Promise<void> {
+    const channel = await this.client.channels.fetch(channelId);
+    if (channel?.type !== ChannelType.GuildText) return;
+    await channel.permissionOverwrites
+      .edit(channel.guild.roles.everyone, { SendMessages: false })
+      .catch((error) => {
+        console.warn(`Could not lock completed channel ${channelId}:`, error);
+      });
+    const active = await channel.threads.fetchActive();
+    await Promise.allSettled(
+      active.threads.map((thread) => thread.setArchived(true, "Task complete")),
+    );
+  }
+
   async recentTurns(msg: IncomingMessage): Promise<ConversationTurn[]> {
     const channel = await this.client.channels.fetch(msg.threadId ?? msg.channelId);
     if (!channel?.isTextBased() || !("messages" in channel)) return [];

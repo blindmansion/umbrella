@@ -48,10 +48,11 @@ export function resolveIntentAction(options: {
   }
   if (classification.directedAtBot < threshold) return undefined;
   if (classification.action === "ignore") return undefined;
-  const actionThreshold =
-    classification.action === "reset" || classification.action === "close"
-      ? Math.min(1, threshold + 0.15)
-      : threshold;
+  const destructive =
+    classification.action === "reset" ||
+    classification.action === "close" ||
+    classification.action === "done";
+  const actionThreshold = destructive ? Math.min(1, threshold + 0.15) : threshold;
   return classification.confidence >= actionThreshold
     ? classification.action
     : undefined;

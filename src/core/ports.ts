@@ -163,6 +163,11 @@ export interface ChatPlatform {
     reason: string;
   }): Promise<string>;
   archiveThreads(channelId: string): Promise<void>;
+  /**
+   * Freeze a completed task channel so no further work happens in it, archiving
+   * its threads while preserving channel history.
+   */
+  archiveChannel(channelId: string): Promise<void>;
   recentTurns(msg: IncomingMessage): Promise<ConversationTurn[]>;
   /**
    * The full conversation in a thread, oldest first. Used to seed a fresh
@@ -179,6 +184,7 @@ export type IntentAction =
   | "create_task"
   | "reset"
   | "close"
+  | "done"
   | "ignore";
 export type IntentSurface = "task_channel" | "thread" | "other";
 export type IntentContext = {
@@ -215,11 +221,25 @@ export type GitHubMetadata = {
   defaultBranch?: string;
 };
 export type GitHubIssue = { number: number; title: string; url: string };
+export type GitHubReferenceState = {
+  /** Whether the issue or pull request is still open. */
+  state: "open" | "closed";
+  /** Pull requests only: whether the pull request was merged. */
+  merged: boolean;
+};
 
 export interface GitHubClient {
   fetchMetadata(ref: GitHubReference): Promise<GitHubMetadata>;
   fetchDefaultBranch(repo: RepoReference): Promise<string | undefined>;
   fetchOpenIssues(repo: RepoReference): Promise<GitHubIssue[]>;
+  /**
+   * Look up the current open/closed state of a linked issue or pull request.
+   * Returns `undefined` when the state can't be determined, so callers leave
+   * the task untouched rather than closing it by mistake.
+   */
+  fetchReferenceState(
+    ref: GitHubReference,
+  ): Promise<GitHubReferenceState | undefined>;
 }
 
 export type CoreConfig = {
@@ -260,6 +280,7 @@ export type Command =
       prompt?: string;
     }
   | { type: "close"; channelId: string }
+  | { type: "done"; channelId: string }
   | { type: "model"; channelId: string; threadId?: string; model?: string }
   | {
       type: "repo";
