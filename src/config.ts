@@ -73,6 +73,7 @@ export function loadConfig(): AppConfig {
     ? {
         endpoint: Bun.env.PHOENIX_ENDPOINT,
         apiKey: Bun.env.PHOENIX_API_KEY,
+        logContent: Bun.env.PHOENIX_LOG_CONTENT?.toLowerCase() !== "false",
       }
     : undefined;
   const networkIsolation =

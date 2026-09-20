@@ -26,6 +26,8 @@ export async function getOrCreateSandbox(options: {
   configHash: string;
   githubToken?: string;
   tracing?: SandboxTracing;
+  /** Discord server name, used to name the Phoenix project for general questions. */
+  guildName?: string;
   networkIsolation?: SandboxNetworkIsolation;
   onRebuild?: () => void | Promise<void>;
 }): Promise<{ sandbox: Sandbox; rebuilt: boolean }> {
@@ -35,6 +37,7 @@ export async function getOrCreateSandbox(options: {
     configHash,
     githubToken,
     tracing,
+    guildName,
     networkIsolation,
     onRebuild,
   } = options;
@@ -110,7 +113,7 @@ export async function getOrCreateSandbox(options: {
   });
 
   try {
-    await bootstrapSandbox(sandbox, task, githubToken, tracing);
+    await bootstrapSandbox(sandbox, task, githubToken, tracing, guildName);
   } catch (error) {
     await sandbox.destroy().catch(() => undefined);
     throw error;
@@ -127,6 +130,7 @@ export async function bootstrapSandbox(
   task: TaskRecord,
   githubToken?: string,
   tracing?: SandboxTracing,
+  guildName?: string,
 ): Promise<void> {
   const encodedToken = githubToken
     ? encodeURIComponent(githubToken)
@@ -207,6 +211,7 @@ export async function bootstrapSandbox(
         sandbox,
         task,
         tracing,
+        guildName,
       });
       console.log(
         `Tracing channel ${task.channelId} into Phoenix project ${projectName}`,
