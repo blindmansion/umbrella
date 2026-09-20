@@ -181,11 +181,11 @@ unexpectedly.
 
 ## Phoenix tracing
 
-Every task channel exports its OpenCode sessions to its own project in a
-self-hosted [Arize Phoenix](https://github.com/Arize-ai/phoenix) instance. The
-project name is derived from the repository and reference (for example
-`umbrella-blindmansion-umbrella-5`), so a channel's traces stay isolated and
-survive sandbox rebuilds.
+Every task channel exports its OpenCode sessions to a self-hosted
+[Arize Phoenix](https://github.com/Arize-ai/phoenix) instance. Traces are
+grouped into one project per repository (for example `blindmansion-umbrella`).
+Tasks that aren't tied to a GitHub issue or pull request are general questions,
+so they share a project named after the Discord server instead.
 
 ### Phoenix and the bot
 
@@ -210,11 +210,19 @@ PHOENIX_API_KEY=...
 Without `PHOENIX_ENDPOINT` the bot logs that tracing is disabled and runs
 sessions untraced.
 
+Spans include prompts, responses, and tool input and output. Set
+`PHOENIX_LOG_CONTENT=false` to export span structure only, with content
+replaced by `<redacted (N chars)>` placeholders.
+
 ### How it works
 
 On sandbox creation the bot installs the
 [Arize OpenCode tracing harness](https://github.com/Arize-ai/coding-harness-tracing/tree/main/tracing/opencode)
-non-interactively and writes `ARIZE_PROJECT_NAME` for the task channel. OpenCode
+non-interactively. The installer only takes a project name from the dotenv file
+named by `ARIZE_ENV_FILE`, and it redacts all content unless the
+`ARIZE_LOG_*` flags are set, so the bot supplies both. Tracing settings are
+written when a sandbox is built; changing them rebuilds existing sandboxes on
+their next prompt. OpenCode
 loads the harness plugin and exports OpenInference spans directly to Phoenix.
 Tracing is best-effort: a failed install logs a warning and the session
 continues untraced.

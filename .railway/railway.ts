@@ -36,6 +36,7 @@ export default defineRailway(() => {
       INTENT_CONFIDENCE_THRESHOLD: preserve(),
       PHOENIX_ENDPOINT: "http://phoenix.railway.internal:6006",
       PHOENIX_API_KEY: preserve(),
+      PHOENIX_LOG_CONTENT: preserve(),
       SANDBOX_NETWORK_ISOLATION: "PRIVATE",
     },
   });

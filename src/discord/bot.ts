@@ -622,6 +622,7 @@ async function runThreadPrompt(options: {
         configHash,
         githubToken,
         tracing: phoenixTracing,
+        guildName: thread.guild.name,
         networkIsolation,
         onRebuild: async () => {
           await clearSessionsForChannel(channelId);

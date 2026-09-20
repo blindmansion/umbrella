@@ -429,6 +429,7 @@ async function provisionTaskChannel(options: {
         configHash: context.configHash,
         githubToken: context.githubToken,
         tracing: context.tracing,
+        guildName: guild.name,
         networkIsolation: context.networkIsolation,
       });
       const readyTask = await updateTask(channel.id, {
