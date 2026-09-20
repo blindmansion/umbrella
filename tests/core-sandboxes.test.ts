@@ -215,6 +215,52 @@ describe("SandboxManager", () => {
     expect(calls[0]).toContain("'custom-branch'");
   });
 
+  test("installs OpenCode agent instructions during bootstrap", async () => {
+    const writes: { path: string; content: string }[] = [];
+    const sandbox: SandboxHandle = {
+      id: "sandbox-agents",
+      exec() {
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+        }) as ExecHandle;
+      },
+      async mkdir() {},
+      async writeFile(path, content) {
+        writes.push({ path, content });
+      },
+      async checkpoint() {},
+      async destroy() {},
+    };
+    const manager = new SandboxManager(
+      {
+        async connect() {
+          throw new Error("unused");
+        },
+        async create() {
+          return sandbox;
+        },
+        ...unavailableCheckpoints(),
+      },
+      { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+    );
+
+    await manager.getOrCreate({
+      task: task({ sandboxId: null, configHash: null }),
+    });
+
+    expect(writes).toEqual([
+      {
+        path: "/root/.config/opencode/AGENTS.md",
+        content: expect.stringContaining("pull request"),
+      },
+    ]);
+    expect(writes[0]?.content).toContain("main");
+    expect(writes[0]?.content).toContain("rebase");
+  });
+
   test("destroys a half-built sandbox and redacts bootstrap errors", async () => {
     const broken = handle("broken", { failClone: true });
     const provider: SandboxProvider = {
