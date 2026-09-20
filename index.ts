@@ -24,6 +24,7 @@ import {
   updateSessionOpenCodeId,
   updateTask,
 } from "./store";
+import type { SandboxTracing } from "./tracing";
 import {
   handleTaskInteraction,
   registerTaskCommands,
@@ -69,7 +70,20 @@ const model =
   (providerEnv.FIREWORKS_API_KEY
     ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
-const configHash = computeConfigHash(model, sandboxEnv);
+
+// Sandboxes only emit traces when we know where Phoenix lives. The endpoint
+// must be reachable from the sandbox: on Railway that is usually the private
+// address `http://phoenix.railway.internal:6006`.
+const phoenixEndpoint = Bun.env.PHOENIX_ENDPOINT;
+const phoenixTracing: SandboxTracing | undefined = phoenixEndpoint
+  ? { endpoint: phoenixEndpoint, apiKey: Bun.env.PHOENIX_API_KEY }
+  : undefined;
+const networkIsolation =
+  Bun.env.SANDBOX_NETWORK_ISOLATION === "PRIVATE" ? "PRIVATE" : "ISOLATED";
+const configHash = computeConfigHash(model, sandboxEnv, {
+  tracing: phoenixTracing,
+  networkIsolation,
+});
 
 const client = new Client({
   intents: [
@@ -105,6 +119,15 @@ client.once(Events.ClientReady, async (readyClient) => {
       ],
     })}`,
   );
+  if (phoenixTracing) {
+    console.log(
+      `OpenCode tracing enabled: sandboxes will export to ${phoenixTracing.endpoint} (networkIsolation=${networkIsolation}).`,
+    );
+  } else {
+    console.log(
+      "OpenCode tracing disabled. Set PHOENIX_ENDPOINT to a Phoenix URL reachable from Railway sandboxes to enable it.",
+    );
+  }
 });
 
 const inFlightThreads = new Set<string>();
@@ -125,6 +148,8 @@ client.on(Events.InteractionCreate, (interaction) => {
     sandboxEnv,
     configHash,
     githubToken,
+    tracing: phoenixTracing,
+    networkIsolation,
   }).catch(async (error) => {
     console.error("Could not handle Discord command:", error);
     const response = {
@@ -280,6 +305,8 @@ async function runThreadPrompt(options: {
         sandboxEnv,
         configHash,
         githubToken,
+        tracing: phoenixTracing,
+        networkIsolation,
         onRebuild: async () => {
           await clearSessionsForChannel(channelId);
           const parent = await client.channels.fetch(channelId).catch((error) => {

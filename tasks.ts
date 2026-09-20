@@ -5,6 +5,7 @@ import {
   type Client,
   type Guild,
 } from "discord.js";
+import type { SandboxNetworkIsolation } from "railway";
 import {
   destroySandbox,
   getOrCreateSandbox,
@@ -19,12 +20,15 @@ import {
   type TaskKind,
   type TaskRecord,
 } from "./store";
+import type { SandboxTracing } from "./tracing";
 
 export type TaskCommandContext = {
   client: Client;
   sandboxEnv: Record<string, string>;
   configHash: string;
   githubToken?: string;
+  tracing?: SandboxTracing;
+  networkIsolation?: SandboxNetworkIsolation;
 };
 
 type GitHubReference = {
@@ -207,6 +211,8 @@ async function createTaskChannel(
           sandboxEnv: context.sandboxEnv,
           configHash: context.configHash,
           githubToken: context.githubToken,
+          tracing: context.tracing,
+          networkIsolation: context.networkIsolation,
         });
         const readyTask = await updateTask(channel.id, {
           sandboxId: sandbox.id,

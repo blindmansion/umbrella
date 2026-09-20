@@ -1,9 +1,14 @@
 .git
+.gitignore
 .github
-.env*
 .agents
 .cursor
 node_modules
 data
 coverage
+.env
+.env.*
+!.env.example
 *.log
+bun.lockb
+scripts

@@ -11,7 +11,7 @@ ENV NODE_ENV=production
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
-COPY index.ts opencode.ts sandboxes.ts store.ts tasks.ts ./
+COPY index.ts opencode.ts sandboxes.ts store.ts tasks.ts tracing.ts ./
 
 USER bun
 CMD ["bun", "run", "index.ts"]

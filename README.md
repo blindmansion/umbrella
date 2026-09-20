@@ -78,6 +78,21 @@ Generate a public domain for the Phoenix service from Railway's Networking
 settings. Phoenix listens on port `6006`; OTLP/gRPC listens privately on
 `4317`.
 
+The infrastructure wires the bot to Phoenix over Railway's private network
+(`PHOENIX_ENDPOINT=http://phoenix.railway.internal:6006` and
+`SANDBOX_NETWORK_ISOLATION=PRIVATE`). Log into the Phoenix domain as
+`admin@localhost`, create a system API key under **Settings → API Keys**, and
+share it with the bot so sandboxes can export:
+
+```bash
+railway variable set \
+  PHOENIX_API_KEY=... \
+  --service umbrella
+```
+
+Without `PHOENIX_API_KEY` the bot still exports to an auth-less Phoenix, but
+authenticated deployments need it.
+
 The databases are connected through Railway's private network. Umbrella creates
 its `tasks` and `sessions` tables during startup. Existing SQLite files are not
 imported; a first Railway deployment starts with empty state.
@@ -85,6 +100,20 @@ imported; a first Railway deployment starts with empty state.
 After setup, every merge to `main` triggers a new Umbrella build and replaces
 the running bot when the deployment is healthy. Changes outside
 `Dockerfile.phoenix` do not rebuild Phoenix.
+
+## Development
+
+Development runs against the Railway project rather than a local stack. Link the
+project and run the bot with `railway run` so `DATABASE_URL`,
+`PHOENIX_ENDPOINT`, and the other service variables are injected from the
+deployed environment:
+
+```bash
+railway link
+railway run bun run dev
+```
+
+Ship changes by merging to `main`; Railway rebuilds and replaces the bot.
 
 ## Discord usage
 
@@ -101,4 +130,45 @@ sandbox and invalidate all thread sessions.
 The Discord invite needs the `bot` and `applications.commands` scopes plus View
 Channel, Send Messages, Read Message History, Create Public Threads, Send
 Messages in Threads, Manage Channels, and Manage Messages permissions.
+
+## Phoenix tracing
+
+Every task channel exports its OpenCode sessions to its own project in a
+self-hosted [Arize Phoenix](https://github.com/Arize-ai/phoenix) instance. The
+project name is derived from the repository and reference (for example
+`umbrella-blindmansion-umbrella-5`), so a channel's traces stay isolated and
+survive sandbox rebuilds.
+
+### Phoenix and the bot
+
+Railway runs Phoenix with authentication enabled and its own managed Postgres,
+as defined in `.railway/railway.ts`. After the first boot, log in as
+`admin@localhost` on the Phoenix domain, set a new password, and create a system
+API key under **Settings → API Keys**. Set `PHOENIX_API_KEY` to that key so
+sandboxes authenticate their exports.
+
+### Connecting sandboxes to Phoenix
+
+The bot passes a single `PHOENIX_ENDPOINT` down to each sandbox, so it must be a
+URL Railway sandboxes can reach. On Railway's private network, run Phoenix as a
+service in the same environment and use its internal address:
+
+```env
+PHOENIX_ENDPOINT=http://phoenix.railway.internal:6006
+SANDBOX_NETWORK_ISOLATION=PRIVATE
+PHOENIX_API_KEY=...
+```
+
+Without `PHOENIX_ENDPOINT` the bot logs that tracing is disabled and runs
+sessions untraced.
+
+### How it works
+
+On sandbox creation the bot installs the
+[Arize OpenCode tracing harness](https://github.com/Arize-ai/coding-harness-tracing/tree/main/tracing/opencode)
+non-interactively and writes `ARIZE_PROJECT_NAME` for the task channel. OpenCode
+loads the harness plugin and exports OpenInference spans directly to Phoenix.
+Tracing is best-effort: a failed install logs a warning and the session
+continues untraced.
+
 

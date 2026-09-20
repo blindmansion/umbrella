@@ -31,6 +31,9 @@ export default defineRailway(() => {
       GIT_AUTHOR_NAME: preserve(),
       GIT_AUTHOR_EMAIL: preserve(),
       OPENCODE_MODEL: preserve(),
+      PHOENIX_ENDPOINT: "http://phoenix.railway.internal:6006",
+      PHOENIX_API_KEY: preserve(),
+      SANDBOX_NETWORK_ISOLATION: "PRIVATE",
     },
   });
 
