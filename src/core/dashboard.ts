@@ -65,6 +65,21 @@ export async function createConfigureLink(
   return `${dashboard.url}/auth/magic?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Whether a user has finished the per-user configuration the dashboard
+ * requires. Once the dashboard is deployed, tasks are only provisioned for
+ * users who have set a Git author and a GitHub token of their own.
+ */
+export async function hasCompleteUserConfig(
+  store: StateStore,
+  userId: string,
+): Promise<boolean> {
+  const settings = await store.getUserSettings(userId);
+  return Boolean(
+    settings?.gitAuthorName && settings.gitAuthorEmail && settings.hasToken,
+  );
+}
+
 export function configureMessage(url: string): string {
   return [
     "Here is your one-time dashboard link. It signs you in instantly and is",

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createMemoryStore } from "../src/adapters/local/store";
 import { createCredentialResolver } from "../src/core/credentials";
+import { hasCompleteUserConfig } from "../src/core/dashboard";
 import {
   effectiveConfigHash,
   sandboxEnvFor,
@@ -62,6 +63,27 @@ describe("per-user credentials", () => {
   test("returns undefined when no dashboard secret is configured", () => {
     const store = createMemoryStore();
     expect(createCredentialResolver(store, undefined)).toBeUndefined();
+  });
+});
+
+describe("required per-user configuration", () => {
+  test("requires a Git author and a token", async () => {
+    const store = createMemoryStore();
+    expect(await hasCompleteUserConfig(store, "user-1")).toBe(false);
+
+    await store.upsertUserSettings("user-1", {
+      gitAuthorName: "Alice",
+      gitAuthorEmail: "alice@example.com",
+      updatedAt: 1,
+    });
+    expect(await hasCompleteUserConfig(store, "user-1")).toBe(false);
+
+    await store.upsertUserSettings("user-1", {
+      encryptedToken: "sealed",
+      tokenHint: "••••cret",
+      updatedAt: 2,
+    });
+    expect(await hasCompleteUserConfig(store, "user-1")).toBe(true);
   });
 });
 

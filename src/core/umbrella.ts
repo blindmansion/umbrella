@@ -7,6 +7,7 @@ import type {
 import {
   configureMessage,
   createConfigureLink,
+  hasCompleteUserConfig,
 } from "./dashboard";
 import { findGitHubReference, parseRepoFullName } from "./github";
 import { runThreadPrompt } from "./prompts";
@@ -304,6 +305,16 @@ export function createUmbrella(deps: Deps) {
   async function onCommand(command: Command): Promise<CommandResult> {
     try {
       if (command.type === "task") {
+        if (
+          deps.config.dashboard &&
+          !(await hasCompleteUserConfig(deps.store, command.actorId))
+        ) {
+          return {
+            ok: false,
+            message:
+              "Before your first task, set your Git author name, Git author email, and GitHub token in the Umbrella dashboard. Run /configure to get a one-time sign-in link.",
+          };
+        }
         const result = await provisionFromCommand(
           deps,
           manager,

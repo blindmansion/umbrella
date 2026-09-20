@@ -234,11 +234,16 @@ the sync stream only ever carry a `••••1234` hint. Members see and edit 
 own configuration; server managers additionally see a read-only summary of
 everyone's.
 
-Once configured, the values are used the next time that user's task sandbox is
-built. Changing them bumps the sandbox's effective config hash, so a changed
-token or identity rebuilds the sandbox on its next prompt. Until then,
-Umbrella's global `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, and `GITHUB_TOKEN`
-remain the fallback.
+Once the dashboard is deployed, its per-user configuration is required: a
+`/task` from a user who has not set a Git author name, Git author email, and
+GitHub token is refused with a pointer to `/configure`, and the global
+`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, and `GITHUB_TOKEN` are no longer used.
+Without `DASHBOARD_URL` and `DASHBOARD_SECRET` the dashboard stays disabled and
+those globals remain the fallback, so a deployment can adopt it gradually.
+
+The values are used the next time that user's task sandbox is built. Changing
+them bumps the sandbox's effective config hash, so a changed token or identity
+rebuilds the sandbox on its next prompt.
 
 ### How the pieces fit
 
