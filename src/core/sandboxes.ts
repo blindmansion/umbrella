@@ -1,3 +1,4 @@
+import { installSandboxAgentInstructions } from "./agents";
 import { listOpenCodeModels } from "./opencode";
 import type {
   CoreConfig,
@@ -317,6 +318,8 @@ export class SandboxManager {
         "/root/workspace",
       );
     }
+
+    await installSandboxAgentInstructions(sandbox);
 
     const install = await sandbox
       .exec(

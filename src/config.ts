@@ -1,3 +1,4 @@
+import { SANDBOX_AGENTS_MD } from "./core/agents";
 import type { CoreConfig } from "./core/ports";
 import type { SandboxTracing } from "./core/tracing";
 import { computeConfigHash } from "./core/utils";
@@ -94,6 +95,7 @@ export function loadConfig(): AppConfig {
     configHash: computeConfigHash(model, sandboxEnv, {
       tracing,
       networkIsolation,
+      agentInstructions: SANDBOX_AGENTS_MD,
     }),
     githubToken,
     tracing,

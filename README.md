@@ -173,8 +173,12 @@ configured. Running `/model` with no option shows the current effective model.
 Each new session gets its own worktree under `/root/worktrees/<thread>` on a
 branch derived from the task branch, and the agent runs there with that
 directory as its working directory. Threads therefore don't collide on
-uncommitted changes or check out the same branch twice. The agent branches,
-commits, pushes, and opens a pull request as needed.
+uncommitted changes or check out the same branch twice. Every sandbox gets an
+`AGENTS.md` at `~/.config/opencode/AGENTS.md` telling the agent to treat the
+task as work to be committed and pushed as a pull request, targeting `main`
+unless another base branch is requested and rebasing to resolve conflicts. The
+agent therefore opens the pull request itself instead of asking whether it
+should.
 
 Each new session starts with the task's context prepended to its first prompt:
 the GitHub issue or pull request title and description, its URL, the task
