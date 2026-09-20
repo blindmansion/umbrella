@@ -1,9 +1,10 @@
 import { runOpenCode } from "./opencode";
 import { splitOutput } from "./output";
-import type { Deps, SandboxHandle } from "./ports";
+import type { Deps, SandboxHandle, TaskRecord } from "./ports";
 import { buildFirstPrompt } from "./context";
 import { updateStatusMessage } from "./provision";
 import { ChannelQueue } from "./queue";
+import { buildRehydrationPrompt } from "./routing";
 import { SandboxManager } from "./sandboxes";
 import type { SessionWorkspace } from "./worktrees";
 
@@ -18,6 +19,7 @@ export async function runThreadPrompt(options: {
   prompt: string;
   createdBy: string;
   includeContext?: boolean;
+  triggerMessageId?: string;
 }): Promise<void> {
   const {
     deps,
@@ -30,6 +32,7 @@ export async function runThreadPrompt(options: {
     prompt,
     createdBy,
     includeContext = true,
+    triggerMessageId,
   } = options;
   if (inFlight.has(threadId)) {
     await deps.chat.send(
@@ -72,34 +75,89 @@ export async function runThreadPrompt(options: {
       await deps.chat.edit(status, "Working in OpenCode...");
     }
 
+    const contextPrompt = prepared.sessionPrompt;
+    let storedSessionId = prepared.storedSessionId;
+    let promptToRun = contextPrompt;
     let step = 0;
-    const response = await runOpenCode({
-      sandbox: prepared.sandbox,
-      model: prepared.model,
-      prompt: prepared.sessionPrompt,
-      sessionId: prepared.storedSessionId,
-      cwd: prepared.workspace.path,
-      onProgress: async (event) => {
-        if (event.type === "step_start") {
-          step += 1;
-          await deps.chat.edit(
-            status!,
-            step === 1
-              ? "OpenCode is thinking..."
-              : `OpenCode is continuing (step ${step})...`,
-          );
-        } else if (event.type === "error") {
-          await deps.chat.send(threadId, "✗ OpenCode reported an error.");
-        }
-      },
-    });
-    if (response.sessionId !== prepared.storedSessionId) {
+
+    const runPrompt = (
+      sessionId: string | undefined,
+      activePrompt: string,
+    ) =>
+      runOpenCode({
+        sandbox: prepared.sandbox,
+        model: prepared.model,
+        prompt: activePrompt,
+        sessionId,
+        cwd: prepared.workspace.path,
+        onProgress: async (event) => {
+          if (event.type === "step_start") {
+            step += 1;
+            await deps.chat.edit(
+              status!,
+              step === 1
+                ? "OpenCode is thinking..."
+                : `OpenCode is continuing (step ${step})...`,
+            );
+          } else if (event.type === "error") {
+            await deps.chat.send(threadId, "✗ OpenCode reported an error.");
+          }
+        },
+      });
+
+    // A rebuilt sandbox invalidated every stored session. Seed a fresh one
+    // with the thread's history so the conversation can continue.
+    if (prepared.rebuilt) {
+      const transcript = await deps.chat.transcript(threadId, {
+        excludeId: triggerMessageId,
+      });
+      if (transcript.length > 0) {
+        promptToRun = buildRehydrationPrompt({
+          task: prepared.task,
+          transcript,
+          prompt: contextPrompt,
+        });
+        await deps.chat.send(
+          threadId,
+          "The sandbox was rebuilt, so I'm continuing in a new session seeded with this thread's history.",
+        );
+      }
+    }
+
+    let response: Awaited<ReturnType<typeof runOpenCode>>;
+    try {
+      response = await runPrompt(storedSessionId, promptToRun);
+    } catch (error) {
+      // A restored checkpoint can predate the session, or the resume can
+      // otherwise fail. Fall back to a fresh session hydrated from history.
+      if (!storedSessionId) throw error;
+      console.warn(
+        "Could not resume OpenCode session; starting a new one from thread history:",
+        error instanceof Error ? error.message : String(error),
+      );
+      const transcript = await deps.chat.transcript(threadId, {
+        excludeId: triggerMessageId,
+      });
+      const retryPrompt =
+        transcript.length > 0
+          ? buildRehydrationPrompt({
+              task: prepared.task,
+              transcript,
+              prompt: contextPrompt,
+            })
+          : contextPrompt;
+      storedSessionId = undefined;
+      response = await runPrompt(undefined, retryPrompt);
+    }
+
+    if (response.sessionId !== storedSessionId) {
       await deps.store.updateSessionOpenCodeId(
         threadId,
         response.sessionId ?? null,
       );
     }
     await sendChunks(deps, threadId, status, response.text);
+    await manager.captureCheckpoint(prepared.sandbox, channelId);
   } catch (error) {
     console.error("OpenCode run failed:", error);
     if (status) {
@@ -123,12 +181,14 @@ async function prepareThreadWorkspace(options: {
   includeContext: boolean;
 }): Promise<
   | {
-      sandbox: SandboxHandle;
-      workspace: SessionWorkspace;
-      storedSessionId: string | undefined;
-      model: string;
-      sessionPrompt: string;
-    }
+       sandbox: SandboxHandle;
+       workspace: SessionWorkspace;
+       storedSessionId: string | undefined;
+       model: string;
+       sessionPrompt: string;
+       rebuilt: boolean;
+       task: TaskRecord;
+     }
   | undefined
 > {
   const {
@@ -148,10 +208,10 @@ async function prepareThreadWorkspace(options: {
     task,
     guildName,
     onRebuild: async () => {
-      await deps.store.clearSessionsForChannel(channelId);
+      await deps.store.clearSessionOpenCodeIdsForChannel(channelId);
       await deps.chat.send(
         channelId,
-        "The task sandbox was rebuilt. Previous thread sessions can't be resumed.",
+        "The task sandbox was rebuilt. Each thread will continue from its Discord history.",
       );
       const rebuiltTask = await deps.store.getTask(channelId);
       if (rebuiltTask) await updateStatusMessage(deps, rebuiltTask);
@@ -170,7 +230,7 @@ async function prepareThreadWorkspace(options: {
   }
 
   let session = await deps.store.getSession(threadId);
-  if (rebuilt || !session) {
+  if (!session) {
     await deps.store.createSession({
       threadId,
       channelId,
@@ -211,6 +271,8 @@ async function prepareThreadWorkspace(options: {
             workspace,
           )
         : prompt,
+    rebuilt,
+    task,
   };
 }
 

@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { buildPendingPrompt } from "../src/core/routing";
+import {
+  buildPendingPrompt,
+  buildRehydrationPrompt,
+} from "../src/core/routing";
 import type { ConversationTurn } from "../src/core/ports";
 
 const human = (content: string, author = "alice"): ConversationTurn => ({
@@ -59,5 +62,43 @@ describe("buildPendingPrompt", () => {
     expect(
       buildPendingPrompt([human("context first")], human("then the ask")),
     ).toBe("context first\n\nthen the ask");
+  });
+});
+
+describe("buildRehydrationPrompt", () => {
+  const task = {
+    repo: "owner/repo",
+    refNumber: 12,
+    kind: "feature" as const,
+    branch: "feat/12-resumable-sandboxes",
+  };
+
+  test("returns the prompt unchanged without prior conversation", () => {
+    expect(
+      buildRehydrationPrompt({ task, transcript: [], prompt: "continue" }),
+    ).toBe("continue");
+  });
+
+  test("seeds task context and the transcript before the request", () => {
+    const prompt = buildRehydrationPrompt({
+      task,
+      transcript: [human("add checkpoints"), bot("Cloned the repo.")],
+      prompt: "now capture the disk",
+    });
+
+    expect(prompt).toContain("owner/repo #12 (feature)");
+    expect(prompt).toContain("branch `feat/12-resumable-sandboxes`");
+    expect(prompt).toContain("alice: add checkpoints");
+    expect(prompt).toContain("umbrella: Cloned the repo.");
+    expect(prompt.endsWith("now capture the disk")).toBe(true);
+  });
+
+  test("escapes backticks in the branch name", () => {
+    const prompt = buildRehydrationPrompt({
+      task: { ...task, branch: "feat/`odd`" },
+      transcript: [human("hi")],
+      prompt: "go",
+    });
+    expect(prompt).toContain("branch `feat/'odd'`");
   });
 });

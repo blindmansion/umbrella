@@ -84,6 +84,13 @@ export function createMemoryStore(clock: () => number = Date.now): StateStore {
         if (session.channelId === channelId) sessions.delete(threadId);
       }
     },
+    async clearSessionOpenCodeIdsForChannel(channelId) {
+      for (const [threadId, session] of sessions) {
+        if (session.channelId === channelId) {
+          sessions.set(threadId, { ...session, openCodeSessionId: null });
+        }
+      }
+    },
     async setGuildRepo(guildId, repo) {
       const record = {
         guildId,

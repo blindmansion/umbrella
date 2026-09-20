@@ -52,6 +52,14 @@ export class TerminalChat implements ChatPlatform {
     return [...(this.turns.get(msg.threadId ?? msg.channelId) ?? [])].slice(-10);
   }
 
+  async transcript(
+    threadId: string,
+    options: { excludeId?: string; limit?: number } = {},
+  ): Promise<ConversationTurn[]> {
+    void options.excludeId;
+    return [...(this.turns.get(threadId) ?? [])].slice(-(options.limit ?? 100));
+  }
+
   accept(msg: IncomingMessage): void {
     this.record(msg.threadId ?? msg.channelId, {
       author: msg.authorName,

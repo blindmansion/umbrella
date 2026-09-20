@@ -110,6 +110,47 @@ export class DiscordChatPlatform implements ChatPlatform {
     }
   }
 
+  async transcript(
+    threadId: string,
+    options: { excludeId?: string; limit?: number } = {},
+  ): Promise<ConversationTurn[]> {
+    const limit = options.limit ?? 100;
+    const channel = await this.client.channels.fetch(threadId);
+    if (!channel?.isTextBased() || !("messages" in channel)) return [];
+    try {
+      const collected: Message[] = [];
+      let before: string | undefined;
+      while (collected.length < limit) {
+        const batchLimit = Math.min(100, limit - collected.length);
+        const batch = await channel.messages.fetch({ limit: batchLimit, before });
+        if (batch.size === 0) break;
+        const messages = [...batch.values()];
+        collected.push(...messages);
+        before = messages[messages.length - 1]?.id;
+        if (batch.size < batchLimit) break;
+      }
+
+      const messages = collected.reverse();
+      if (channel.isThread()) {
+        const starter = await channel.fetchStarterMessage().catch(() => null);
+        if (starter && !messages.some((message) => message.id === starter.id)) {
+          messages.unshift(starter);
+        }
+      }
+
+      return messages
+        .filter((message) => message.id !== options.excludeId)
+        .map((message) => this.toTurn(message))
+        .filter((turn) => turn.content.trim().length > 0);
+    } catch (error) {
+      console.warn(
+        "Could not fetch thread transcript for session recovery:",
+        error instanceof Error ? error.message : String(error),
+      );
+      return [];
+    }
+  }
+
   private toTurn(message: Message): ConversationTurn {
     let content = message.content;
     const botId = this.client.user?.id;

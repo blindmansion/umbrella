@@ -34,6 +34,9 @@ function fakeChat() {
     async recentTurns() {
       return [];
     },
+    async transcript() {
+      return [];
+    },
   };
   return { chat, sent };
 }
@@ -59,7 +62,26 @@ function sandbox(): SandboxHandle {
     },
     async mkdir() {},
     async writeFile() {},
+    async checkpoint() {},
     async destroy() {},
+  };
+}
+
+function fakeSandboxes() {
+  return {
+    async create() {
+      return sandbox();
+    },
+    async connect() {
+      return sandbox();
+    },
+    async restore() {
+      return sandbox();
+    },
+    async listCheckpoints() {
+      return [];
+    },
+    async deleteCheckpoint() {},
   };
 }
 
@@ -81,14 +103,7 @@ describe("createUmbrella", () => {
     const runtime = createUmbrella({
       store,
       chat,
-      sandboxes: {
-        async create() {
-          return sandbox();
-        },
-        async connect() {
-          return sandbox();
-        },
-      },
+      sandboxes: fakeSandboxes(),
       github: {
         async fetchMetadata() {
           return { title: "Fix the bug", defaultBranch: "main" };
@@ -144,6 +159,7 @@ describe("createUmbrella", () => {
       },
       async mkdir() {},
       async writeFile() {},
+      async checkpoint() {},
       async destroy() {},
     };
     const runtime = createUmbrella({
@@ -156,6 +172,13 @@ describe("createUmbrella", () => {
         async connect() {
           return executionSandbox;
         },
+        async restore() {
+          return executionSandbox;
+        },
+        async listCheckpoints() {
+          return [];
+        },
+        async deleteCheckpoint() {},
       },
       github: {
         async fetchMetadata() {
@@ -234,6 +257,7 @@ describe("createUmbrella", () => {
       },
       async mkdir() {},
       async writeFile() {},
+      async checkpoint() {},
       async destroy() {},
     };
     const runtime = createUmbrella({
@@ -246,6 +270,13 @@ describe("createUmbrella", () => {
         async connect() {
           return executionSandbox;
         },
+        async restore() {
+          return executionSandbox;
+        },
+        async listCheckpoints() {
+          return [];
+        },
+        async deleteCheckpoint() {},
       },
       github: {
         async fetchMetadata() {
@@ -316,6 +347,7 @@ describe("createUmbrella", () => {
       },
       async mkdir() {},
       async writeFile() {},
+      async checkpoint() {},
       async destroy() {},
     };
     const runtime = createUmbrella({
@@ -328,6 +360,13 @@ describe("createUmbrella", () => {
         async connect() {
           return executionSandbox;
         },
+        async restore() {
+          return executionSandbox;
+        },
+        async listCheckpoints() {
+          return [];
+        },
+        async deleteCheckpoint() {},
       },
       github: {
         async fetchMetadata() {
@@ -380,14 +419,7 @@ describe("createUmbrella", () => {
     const firstChat = fakeChat().chat;
     const secondChat = fakeChat().chat;
     const common = {
-      sandboxes: {
-        async create() {
-          return sandbox();
-        },
-        async connect() {
-          return sandbox();
-        },
-      },
+      sandboxes: fakeSandboxes(),
       github: {
         async fetchMetadata() {
           return {};

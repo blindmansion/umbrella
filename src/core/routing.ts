@@ -4,6 +4,7 @@ import type {
   IncomingMessage,
   IntentAction,
   IntentContext,
+  TaskRecord,
 } from "./ports";
 
 export async function classifyAction(
@@ -80,6 +81,36 @@ export function buildPendingPrompt(
         : turn.content.trim(),
     )
     .join("\n\n");
+}
+
+/**
+ * Seed a fresh OpenCode session with the task's context and the messages the
+ * thread already exchanged. Used when a sandbox was rebuilt without a usable
+ * checkpoint, so the stored OpenCode session can't be resumed.
+ */
+export function buildRehydrationPrompt(options: {
+  task: Pick<TaskRecord, "repo" | "refNumber" | "kind" | "branch">;
+  transcript: ConversationTurn[];
+  prompt: string;
+}): string {
+  const { task, transcript, prompt } = options;
+  const converse = transcript.filter((turn) => turn.content.trim().length > 0);
+  if (converse.length === 0) return prompt;
+
+  const reference = task.refNumber === null ? "" : ` #${task.refNumber}`;
+  const conversation = converse
+    .map((turn) => `${turn.author}: ${turn.content.trim()}`)
+    .join("\n\n");
+
+  return [
+    "An OpenCode session for this task was replaced because its sandbox was rebuilt. Continue the work below in a fresh session.",
+    "",
+    `Task: ${task.repo}${reference} (${task.kind}), branch \`${task.branch.replaceAll("`", "'")}\``,
+    "Earlier conversation:",
+    conversation,
+    "Current request:",
+    prompt,
+  ].join("\n");
 }
 
 export function createThreadName(prompt: string): string {

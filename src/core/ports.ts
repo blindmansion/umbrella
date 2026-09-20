@@ -75,6 +75,7 @@ export interface StateStore {
   ): Promise<SessionRecord | undefined>;
   listSessionsForChannel(channelId: string): Promise<SessionRecord[]>;
   clearSessionsForChannel(channelId: string): Promise<void>;
+  clearSessionOpenCodeIdsForChannel(channelId: string): Promise<void>;
   setGuildRepo(guildId: string, repo: string): Promise<GuildRepoRecord>;
   getGuildRepo(guildId: string): Promise<GuildRepoRecord | undefined>;
   clearGuildRepo(guildId: string): Promise<void>;
@@ -104,16 +105,26 @@ export interface SandboxHandle {
   exec(command: string, opts?: ExecOptions): ExecHandle;
   writeFile(path: string, content: string): Promise<void>;
   mkdir(path: string): Promise<void>;
+  /** Capture the sandbox's disk under a reusable name. */
+  checkpoint(name: string): Promise<void>;
   destroy(): Promise<void>;
 }
 
+export type SandboxCheckpoint = { id: string; key: string };
+
+export type SandboxCreateOptions = {
+  env: Record<string, string>;
+  idleTimeoutMinutes: number;
+  networkIsolation?: "PRIVATE" | "ISOLATED";
+};
+
 export interface SandboxProvider {
-  create(opts: {
-    env: Record<string, string>;
-    idleTimeoutMinutes: number;
-    networkIsolation?: "PRIVATE" | "ISOLATED";
-  }): Promise<SandboxHandle>;
+  create(opts: SandboxCreateOptions): Promise<SandboxHandle>;
   connect(id: string): Promise<SandboxHandle>;
+  /** Boot a sandbox from a checkpoint captured with `checkpoint`. */
+  restore(name: string, opts: SandboxCreateOptions): Promise<SandboxHandle>;
+  listCheckpoints(): Promise<SandboxCheckpoint[]>;
+  deleteCheckpoint(id: string): Promise<void>;
 }
 
 export type ConversationTurn = {
@@ -153,6 +164,14 @@ export interface ChatPlatform {
   }): Promise<string>;
   archiveThreads(channelId: string): Promise<void>;
   recentTurns(msg: IncomingMessage): Promise<ConversationTurn[]>;
+  /**
+   * The full conversation in a thread, oldest first. Used to seed a fresh
+   * session when a stored OpenCode session can't be resumed.
+   */
+  transcript(
+    threadId: string,
+    options?: { excludeId?: string; limit?: number },
+  ): Promise<ConversationTurn[]>;
 }
 
 export type IntentAction =
