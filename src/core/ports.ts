@@ -13,8 +13,68 @@ export type TaskRecord = {
   statusMessageId: string | null;
   model: string | null;
   context: string | null;
+  /** Discord user whose dashboard configuration provisioned this task. */
+  createdBy: string | null;
   createdAt: number;
 };
+
+/** Per-user dashboard configuration. The GitHub token is never included. */
+export type UserSettingsRecord = {
+  userId: string;
+  userName: string | null;
+  gitAuthorName: string | null;
+  gitAuthorEmail: string | null;
+  /** Non-sensitive suffix of the stored token, e.g. `••••1234`. */
+  tokenHint: string | null;
+  hasToken: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** The encrypted-at-rest portion of a user's configuration. */
+export type UserSecretRecord = {
+  userId: string;
+  /** base64url(iv || AES-256-GCM ciphertext+tag). */
+  encryptedToken: string;
+  updatedAt: number;
+};
+
+export type UserSettingsUpdate = {
+  userName?: string | null;
+  gitAuthorName?: string | null;
+  gitAuthorEmail?: string | null;
+  encryptedToken?: string | null;
+  tokenHint?: string | null;
+  updatedAt: number;
+};
+
+export type MagicLinkRecord = {
+  nonce: string;
+  guildId: string;
+  guildName: string | null;
+  userId: string;
+  userName: string | null;
+  isAdmin: boolean;
+  expiresAt: number;
+  consumedAt: number | null;
+  createdAt: number;
+};
+
+/**
+ * The credentials a sandbox should use, resolved per task creator. A missing
+ * value falls back to the global environment.
+ */
+export type SandboxUserConfig = {
+  gitAuthorName?: string | null;
+  gitAuthorEmail?: string | null;
+  githubToken?: string | null;
+  /** Changes whenever the user's stored configuration changes. */
+  version: number;
+};
+
+export type CredentialResolver = (
+  task: TaskRecord,
+) => Promise<SandboxUserConfig | undefined>;
 
 export type SessionRecord = {
   threadId: string;
@@ -79,6 +139,20 @@ export interface StateStore {
   setGuildRepo(guildId: string, repo: string): Promise<GuildRepoRecord>;
   getGuildRepo(guildId: string): Promise<GuildRepoRecord | undefined>;
   clearGuildRepo(guildId: string): Promise<void>;
+  getUserSettings(userId: string): Promise<UserSettingsRecord | undefined>;
+  listUserSettings(): Promise<UserSettingsRecord[]>;
+  upsertUserSettings(
+    userId: string,
+    update: UserSettingsUpdate,
+  ): Promise<UserSettingsRecord>;
+  getUserSecret(userId: string): Promise<UserSecretRecord | undefined>;
+  createMagicLink(link: MagicLinkRecord): Promise<void>;
+  /** Atomically consumes a nonce, returning its record once. */
+  consumeMagicLink(
+    nonce: string,
+    now: number,
+  ): Promise<MagicLinkRecord | undefined>;
+  deleteExpiredMagicLinks(now: number): Promise<void>;
 }
 
 export type ExecOptions = {
@@ -254,6 +328,11 @@ export type CoreConfig = {
   };
   networkIsolation?: "PRIVATE" | "ISOLATED";
   intentConfidenceThreshold?: number;
+  /** Public dashboard base URL and shared signing secret. */
+  dashboard?: {
+    url: string;
+    secret: string;
+  };
 };
 
 export type Deps = {
@@ -263,6 +342,7 @@ export type Deps = {
   classifier?: IntentClassifier;
   github: GitHubClient;
   config: CoreConfig;
+  credentials?: CredentialResolver;
   clock?: () => number;
 };
 
@@ -287,6 +367,14 @@ export type Command =
       guildId: string;
       action: "show" | "set" | "clear";
       repo?: string;
+    }
+  | {
+      type: "configure";
+      guildId: string;
+      guildName: string | null;
+      userId: string;
+      userName: string | null;
+      isAdmin: boolean;
     };
 
 export type CommandResult = {

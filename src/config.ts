@@ -91,6 +91,18 @@ export function loadConfig(): AppConfig {
       ? "PRIVATE"
       : "ISOLATED";
 
+  const dashboardUrl = Bun.env.DASHBOARD_URL?.trim().replace(/\/+$/, "");
+  const dashboardSecret = Bun.env.DASHBOARD_SECRET?.trim();
+  const dashboard =
+    dashboardUrl && dashboardSecret
+      ? { url: dashboardUrl, secret: dashboardSecret }
+      : undefined;
+  if (dashboardUrl && !dashboardSecret) {
+    throw new Error(
+      "DASHBOARD_SECRET must be set when DASHBOARD_URL is configured",
+    );
+  }
+
   const intent = Bun.env.TYPESAFE_API_KEY
     ? {
         apiKey: Bun.env.TYPESAFE_API_KEY,
@@ -113,6 +125,7 @@ export function loadConfig(): AppConfig {
     githubToken,
     tracing,
     networkIsolation,
+    dashboard,
     intent,
     intentConfidenceThreshold: intent?.confidenceThreshold,
     reconcileIntervalMinutes: parseReconcileIntervalMinutes(

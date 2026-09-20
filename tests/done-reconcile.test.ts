@@ -100,6 +100,7 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
     statusMessageId: null,
     model: null,
     context: null,
+    createdBy: null,
     createdAt: 1,
     ...overrides,
   };

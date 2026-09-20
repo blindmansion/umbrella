@@ -87,6 +87,7 @@ function task(
     statusMessageId: null,
     model: null,
     context: null,
+    createdBy: null,
     createdAt: 1_700_000_000_000,
     ...overrides,
   };
@@ -117,6 +118,7 @@ describe("SandboxManager recovery", () => {
       sandbox: expect.objectContaining({ id: "restored-sandbox" }),
       rebuilt: false,
       restored: true,
+      configHash: "hash",
     });
     expect(rebuilt).toBe(false);
     expect(createdSources).toEqual([checkpointNameForChannel(channelId)]);
@@ -137,6 +139,7 @@ describe("SandboxManager recovery", () => {
       sandbox: expect.objectContaining({ id: "new-sandbox" }),
       rebuilt: true,
       restored: false,
+      configHash: "hash",
     });
     expect(rebuilds).toBe(1);
   });
@@ -157,6 +160,7 @@ describe("SandboxManager recovery", () => {
       sandbox: expect.objectContaining({ id: "gone-sandbox" }),
       rebuilt: false,
       restored: false,
+      configHash: "hash",
     });
     expect(rebuilds).toBe(0);
   });
