@@ -5,6 +5,7 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
+    "dev:local": "bun run src/local.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "railway:plan": "railway config plan",

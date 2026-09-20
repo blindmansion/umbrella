@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { newDb } from "pg-mem";
-import { queueDepth, runExclusive } from "../src/sandbox/queue";
+import { ChannelQueue } from "../src/sandbox/queue";
 import {
   createStore,
   type DatabasePool,
@@ -184,6 +184,7 @@ describe("state store", () => {
 
 describe("per-channel queue", () => {
   test("runs work for one channel in FIFO order and reports depth", async () => {
+    const queue = new ChannelQueue();
     const events: string[] = [];
     let releaseFirst!: () => void;
     let markFirstStarted!: () => void;
@@ -194,21 +195,21 @@ describe("per-channel queue", () => {
       markFirstStarted = resolve;
     });
 
-    const first = runExclusive("fifo-channel", async () => {
+    const first = queue.runExclusive("fifo-channel", async () => {
       events.push("first:start");
       markFirstStarted();
       await firstGate;
       events.push("first:end");
       return 1;
     });
-    const second = runExclusive("fifo-channel", async () => {
+    const second = queue.runExclusive("fifo-channel", async () => {
       events.push("second:start");
       events.push("second:end");
       return 2;
     });
 
     await firstStarted;
-    expect(queueDepth("fifo-channel")).toBe(2);
+    expect(queue.depth("fifo-channel")).toBe(2);
     expect(events).toEqual(["first:start"]);
 
     releaseFirst();
@@ -219,30 +220,31 @@ describe("per-channel queue", () => {
       "second:start",
       "second:end",
     ]);
-    expect(queueDepth("fifo-channel")).toBe(0);
+    expect(queue.depth("fifo-channel")).toBe(0);
   });
 
   test("allows different channels to run concurrently", async () => {
+    const queue = new ChannelQueue();
     const events: string[] = [];
     let releaseA!: () => void;
     const gateA = new Promise<void>((resolve) => {
       releaseA = resolve;
     });
 
-    const channelA = runExclusive("parallel-a", async () => {
+    const channelA = queue.runExclusive("parallel-a", async () => {
       events.push("a:start");
       await gateA;
       events.push("a:end");
     });
-    const channelB = runExclusive("parallel-b", async () => {
+    const channelB = queue.runExclusive("parallel-b", async () => {
       events.push("b:start");
       events.push("b:end");
     });
 
     await channelB;
     expect(events).toEqual(["a:start", "b:start", "b:end"]);
-    expect(queueDepth("parallel-a")).toBe(1);
-    expect(queueDepth("parallel-b")).toBe(0);
+    expect(queue.depth("parallel-a")).toBe(1);
+    expect(queue.depth("parallel-b")).toBe(0);
 
     releaseA();
     await channelA;

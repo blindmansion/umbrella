@@ -1,5 +1,4 @@
-import type { Sandbox } from "railway";
-import type { TaskRecord } from "../store";
+import type { SandboxHandle, TaskRecord } from "../core/ports";
 
 export type SandboxTracing = {
   /** Phoenix base URL reachable from inside a Railway sandbox. */
@@ -43,7 +42,7 @@ function projectSlug(value: string): string {
  * project config so OpenCode exports OpenInference spans straight to Phoenix.
  */
 export async function configureSandboxTracing(options: {
-  sandbox: Sandbox;
+  sandbox: SandboxHandle;
   task: TaskRecord;
   tracing: SandboxTracing;
   guildName?: string;

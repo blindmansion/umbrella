@@ -1,5 +1,5 @@
-import type { SandboxNetworkIsolation } from "railway";
-import { computeConfigHash } from "./sandbox/manager";
+import type { CoreConfig } from "./core/ports";
+import { computeConfigHash } from "./core/utils";
 import type { SandboxTracing } from "./tracing/phoenix";
 
 export type IntentConfig = {
@@ -8,14 +8,10 @@ export type IntentConfig = {
   confidenceThreshold: number;
 };
 
-export type AppConfig = {
+export type AppConfig = CoreConfig & {
   token: string;
-  model: string;
-  sandboxEnv: Record<string, string>;
-  configHash: string;
-  githubToken?: string;
   tracing?: SandboxTracing;
-  networkIsolation: SandboxNetworkIsolation;
+  networkIsolation: "PRIVATE" | "ISOLATED";
   intent?: IntentConfig;
 };
 
@@ -103,5 +99,6 @@ export function loadConfig(): AppConfig {
     tracing,
     networkIsolation,
     intent,
+    intentConfidenceThreshold: intent?.confidenceThreshold,
   };
 }

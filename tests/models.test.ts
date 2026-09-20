@@ -1,21 +1,45 @@
 import { describe, expect, test } from "bun:test";
-import type { Sandbox } from "railway";
+import type { ExecHandle, SandboxHandle } from "../src/core/ports";
+import { SandboxManager } from "../src/core/sandboxes";
 import { clearModelCache, getAvailableModels } from "../src/opencode/models";
 import { parseModelList } from "../src/opencode/runner";
 
 function fakeSandbox(outputs: string[]): {
-  sandbox: Sandbox;
+  sandbox: SandboxHandle;
   calls: () => number;
 } {
   let calls = 0;
   const sandbox = {
-    exec: async () => {
+    id: "models-sandbox",
+    exec: () => {
       const output = outputs[Math.min(calls, outputs.length - 1)] ?? "";
       calls += 1;
-      return { exitCode: 0, stdout: output, stderr: "", timedOut: false };
+      return Promise.resolve({
+        exitCode: 0,
+        stdout: output,
+        stderr: "",
+        timedOut: false,
+      }) as ExecHandle;
     },
-  } as unknown as Sandbox;
+    async writeFile() {},
+    async mkdir() {},
+    async destroy() {},
+  };
   return { sandbox, calls: () => calls };
+}
+
+function manager() {
+  return new SandboxManager(
+    {
+      async create() {
+        throw new Error("unused");
+      },
+      async connect() {
+        throw new Error("unused");
+      },
+    },
+    { model: "test/model", sandboxEnv: {}, configHash: "hash" },
+  );
 }
 
 describe("parseModelList", () => {
@@ -43,13 +67,14 @@ describe("parseModelList", () => {
 
 describe("getAvailableModels", () => {
   test("lists models from the sandbox and caches the result", async () => {
-    clearModelCache();
+    const models = manager();
+    clearModelCache(models);
     const { sandbox, calls } = fakeSandbox([
       "anthropic/claude-sonnet-4-6\nfireworks-ai/models/glm-5p3\n",
     ]);
 
-    const first = await getAvailableModels("channel-1", sandbox);
-    const second = await getAvailableModels("channel-1", sandbox);
+    const first = await getAvailableModels(models, "channel-1", sandbox);
+    const second = await getAvailableModels(models, "channel-1", sandbox);
 
     expect(first).toEqual([
       "anthropic/claude-sonnet-4-6",
@@ -60,14 +85,15 @@ describe("getAvailableModels", () => {
   });
 
   test("refresh bypasses the cache", async () => {
-    clearModelCache();
+    const models = manager();
+    clearModelCache(models);
     const { sandbox, calls } = fakeSandbox([
       "anthropic/claude-sonnet-4-6\n",
       "anthropic/claude-opus-4-6\n",
     ]);
 
-    await getAvailableModels("channel-refresh", sandbox);
-    const refreshed = await getAvailableModels("channel-refresh", sandbox, {
+    await getAvailableModels(models, "channel-refresh", sandbox);
+    const refreshed = await getAvailableModels(models, "channel-refresh", sandbox, {
       refresh: true,
     });
 

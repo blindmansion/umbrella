@@ -1,80 +1,23 @@
 import { Pool, type QueryResult, type QueryResultRow } from "pg";
+import type {
+  GuildRepoRecord,
+  SessionRecord,
+  StateStore,
+  TaskKind,
+  TaskRecord,
+  TaskStatus,
+  TaskUpdate,
+} from "../core/ports";
 
-export type TaskKind = "planning" | "feature" | "bugfix" | "review";
-export type TaskStatus = "provisioning" | "ready" | "archived";
-
-export type TaskRecord = {
-  channelId: string;
-  kind: TaskKind;
-  repo: string;
-  refNumber: number | null;
-  branch: string;
-  sandboxId: string | null;
-  status: TaskStatus;
-  configHash: string | null;
-  statusMessageId: string | null;
-  model: string | null;
-  context: string | null;
-  createdAt: number;
-};
-
-export type SessionRecord = {
-  threadId: string;
-  channelId: string;
-  openCodeSessionId: string | null;
-  model: string | null;
-  createdBy: string | null;
-  createdAt: number;
-};
-
-export type GuildRepoRecord = {
-  guildId: string;
-  repo: string;
-  createdAt: number;
-};
-
-export type TaskUpdate = Partial<
-  Pick<
-    TaskRecord,
-    | "kind"
-    | "repo"
-    | "refNumber"
-    | "branch"
-    | "sandboxId"
-    | "status"
-    | "configHash"
-    | "statusMessageId"
-    | "model"
-    | "context"
-  >
->;
-
-export type StateStore = {
-  close(): Promise<void>;
-  createTask(task: TaskRecord): Promise<void>;
-  getTask(channelId: string): Promise<TaskRecord | undefined>;
-  updateTask(
-    channelId: string,
-    update: TaskUpdate,
-  ): Promise<TaskRecord | undefined>;
-  listActiveTasks(): Promise<TaskRecord[]>;
-  deleteTask(channelId: string): Promise<void>;
-  createSession(session: SessionRecord): Promise<void>;
-  getSession(threadId: string): Promise<SessionRecord | undefined>;
-  updateSessionOpenCodeId(
-    threadId: string,
-    openCodeSessionId: string | null,
-  ): Promise<SessionRecord | undefined>;
-  updateSessionModel(
-    threadId: string,
-    model: string | null,
-  ): Promise<SessionRecord | undefined>;
-  listSessionsForChannel(channelId: string): Promise<SessionRecord[]>;
-  clearSessionsForChannel(channelId: string): Promise<void>;
-  setGuildRepo(guildId: string, repo: string): Promise<GuildRepoRecord>;
-  getGuildRepo(guildId: string): Promise<GuildRepoRecord | undefined>;
-  clearGuildRepo(guildId: string): Promise<void>;
-};
+export type {
+  GuildRepoRecord,
+  SessionRecord,
+  StateStore,
+  TaskKind,
+  TaskRecord,
+  TaskStatus,
+  TaskUpdate,
+} from "../core/ports";
 
 type TaskRow = {
   channel_id: string;
@@ -331,98 +274,6 @@ export async function createStore(options: {
       await database.query("DELETE FROM guilds WHERE guild_id = $1", [guildId]);
     },
   };
-}
-
-let defaultStore: Promise<StateStore> | undefined;
-
-function getDefaultStore(): Promise<StateStore> {
-  defaultStore ??= createStore();
-  return defaultStore;
-}
-
-export async function initializeStore(): Promise<void> {
-  await getDefaultStore();
-}
-
-export async function createTask(task: TaskRecord): Promise<void> {
-  return (await getDefaultStore()).createTask(task);
-}
-
-export async function getTask(
-  channelId: string,
-): Promise<TaskRecord | undefined> {
-  return (await getDefaultStore()).getTask(channelId);
-}
-
-export async function updateTask(
-  channelId: string,
-  update: TaskUpdate,
-): Promise<TaskRecord | undefined> {
-  return (await getDefaultStore()).updateTask(channelId, update);
-}
-
-export async function listActiveTasks(): Promise<TaskRecord[]> {
-  return (await getDefaultStore()).listActiveTasks();
-}
-
-export async function deleteTask(channelId: string): Promise<void> {
-  return (await getDefaultStore()).deleteTask(channelId);
-}
-
-export async function createSession(session: SessionRecord): Promise<void> {
-  return (await getDefaultStore()).createSession(session);
-}
-
-export async function getSession(
-  threadId: string,
-): Promise<SessionRecord | undefined> {
-  return (await getDefaultStore()).getSession(threadId);
-}
-
-export async function updateSessionOpenCodeId(
-  threadId: string,
-  openCodeSessionId: string | null,
-): Promise<SessionRecord | undefined> {
-  return (await getDefaultStore()).updateSessionOpenCodeId(
-    threadId,
-    openCodeSessionId,
-  );
-}
-
-export async function updateSessionModel(
-  threadId: string,
-  model: string | null,
-): Promise<SessionRecord | undefined> {
-  return (await getDefaultStore()).updateSessionModel(threadId, model);
-}
-
-export async function listSessionsForChannel(
-  channelId: string,
-): Promise<SessionRecord[]> {
-  return (await getDefaultStore()).listSessionsForChannel(channelId);
-}
-
-export async function clearSessionsForChannel(
-  channelId: string,
-): Promise<void> {
-  return (await getDefaultStore()).clearSessionsForChannel(channelId);
-}
-
-export async function setGuildRepo(
-  guildId: string,
-  repo: string,
-): Promise<GuildRepoRecord> {
-  return (await getDefaultStore()).setGuildRepo(guildId, repo);
-}
-
-export async function getGuildRepo(
-  guildId: string,
-): Promise<GuildRepoRecord | undefined> {
-  return (await getDefaultStore()).getGuildRepo(guildId);
-}
-
-export async function clearGuildRepo(guildId: string): Promise<void> {
-  return (await getDefaultStore()).clearGuildRepo(guildId);
 }
 
 function taskFromRow(row: TaskRow): TaskRecord {

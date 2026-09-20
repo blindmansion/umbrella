@@ -105,10 +105,21 @@ the running bot when the deployment is healthy. Changes outside
 
 ## Development
 
-Development runs against the Railway project rather than a local stack. Link the
-project and run the bot with `railway run` so `DATABASE_URL`,
-`PHOENIX_ENDPOINT`, and the other service variables are injected from the
-deployed environment:
+For a local terminal session, set a model-provider key and a default repository,
+then run:
+
+```bash
+ANTHROPIC_API_KEY=... LOCAL_REPO=owner/name bun run dev:local
+```
+
+Type `@umbrella <request>` at the prompt. Local mode uses an in-memory store and
+a temporary-directory sandbox, so it needs no Discord token, Railway project,
+or Postgres database. `GITHUB_TOKEN` is optional. The local adapter executes
+tools on the host and is intended only for trusted repositories.
+
+To exercise the production Discord and Railway adapters, link the project and
+run the bot with `railway run` so `DATABASE_URL`, `PHOENIX_ENDPOINT`, and the
+other service variables are injected from the deployed environment:
 
 ```bash
 railway link

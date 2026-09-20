@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import type { Sandbox } from "railway";
+import type {
+  ExecHandle,
+  ExecOptions,
+  SandboxHandle,
+} from "../src/core/ports";
 import type { TaskRecord } from "../src/store";
 import {
   configureSandboxTracing,
@@ -26,12 +30,16 @@ function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
 
 function fakeSandbox(result = { exitCode: 0, stdout: "", stderr: "", timedOut: false }) {
   const calls: { command: string; env: Record<string, string> }[] = [];
-  const sandbox = {
-    exec: async (command: string, options: { env: Record<string, string> }) => {
-      calls.push({ command, env: options.env });
-      return result;
+  const sandbox: SandboxHandle = {
+    id: "sandbox",
+    exec(command: string, options: ExecOptions = {}) {
+      calls.push({ command, env: options.env ?? {} });
+      return Promise.resolve(result) as ExecHandle;
     },
-  } as unknown as Sandbox;
+    async writeFile() {},
+    async mkdir() {},
+    async destroy() {},
+  };
   return { sandbox, calls };
 }
 
