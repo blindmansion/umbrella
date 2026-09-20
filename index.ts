@@ -5,6 +5,7 @@ import {
   OAuth2Scopes,
   PermissionFlagsBits,
 } from "discord.js";
+import { createHash } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { Sandbox } from "railway";
 
@@ -14,8 +15,8 @@ const providerEnv: Record<string, string> = {};
 if (Bun.env.ANTHROPIC_API_KEY) {
   providerEnv.ANTHROPIC_API_KEY = Bun.env.ANTHROPIC_API_KEY;
 }
-if (Bun.env.OPENROUTER_API_KEY) {
-  providerEnv.OPENROUTER_API_KEY = Bun.env.OPENROUTER_API_KEY;
+if (Bun.env.FIREWORKS_API_KEY) {
+  providerEnv.FIREWORKS_API_KEY = Bun.env.FIREWORKS_API_KEY;
 }
 
 if (!token) {
@@ -23,21 +24,25 @@ if (!token) {
 }
 if (Object.keys(providerEnv).length === 0) {
   throw new Error(
-    "ANTHROPIC_API_KEY or OPENROUTER_API_KEY must be set in .env",
+    "ANTHROPIC_API_KEY or FIREWORKS_API_KEY must be set in .env",
   );
 }
 
 const model =
   Bun.env.OPENCODE_MODEL ??
-  (providerEnv.OPENROUTER_API_KEY
-    ? "openrouter/qwen/qwen3-coder"
+  (providerEnv.FIREWORKS_API_KEY
+    ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
+const sandboxConfigurationHash = createHash("sha256")
+  .update(JSON.stringify({ model, providerEnv }))
+  .digest("hex");
 const dataDirectory = `${process.cwd()}/data`;
 const sessionStatePath = `${dataDirectory}/session.json`;
 
 type SessionState = {
   sandboxId: string;
   openCodeSessionId?: string;
+  configurationHash?: string;
 };
 
 type ProgressEvent =
@@ -210,6 +215,7 @@ async function runOpenCode(
     await saveSessionState({
       sandboxId: sandbox.id,
       openCodeSessionId: discoveredSessionId,
+      configurationHash: sandboxConfigurationHash,
     });
   }
 
@@ -269,6 +275,20 @@ function collectOpenCodeEvent(
 async function getOrCreateSandbox() {
   if (activeSandbox) return activeSandbox;
 
+  if (
+    sessionState &&
+    sessionState.configurationHash !== sandboxConfigurationHash
+  ) {
+    console.log("Sandbox configuration changed; replacing the saved sandbox");
+    const staleSandbox = await Sandbox.connect(sessionState.sandboxId).catch(
+      () => undefined,
+    );
+    await staleSandbox?.destroy().catch((error) => {
+      console.warn(`Could not destroy stale sandbox ${sessionState?.sandboxId}:`, error);
+    });
+    await clearSessionState();
+  }
+
   if (sessionState) {
     try {
       activeSandbox = await Sandbox.connect(sessionState.sandboxId);
@@ -287,7 +307,10 @@ async function getOrCreateSandbox() {
     idleTimeoutMinutes: 60,
     env: providerEnv,
   });
-  await saveSessionState({ sandboxId: activeSandbox.id });
+  await saveSessionState({
+    sandboxId: activeSandbox.id,
+    configurationHash: sandboxConfigurationHash,
+  });
   console.log(`Created persistent Railway sandbox ${activeSandbox.id}`);
   return activeSandbox;
 }
@@ -323,6 +346,10 @@ async function loadSessionState(): Promise<SessionState | undefined> {
       openCodeSessionId:
         typeof value.openCodeSessionId === "string"
           ? value.openCodeSessionId
+          : undefined,
+      configurationHash:
+        typeof value.configurationHash === "string"
+          ? value.configurationHash
           : undefined,
     };
   } catch (error) {

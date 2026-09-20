@@ -4,21 +4,21 @@ const providerEnv: Record<string, string> = {};
 if (Bun.env.ANTHROPIC_API_KEY) {
   providerEnv.ANTHROPIC_API_KEY = Bun.env.ANTHROPIC_API_KEY;
 }
-if (Bun.env.OPENROUTER_API_KEY) {
-  providerEnv.OPENROUTER_API_KEY = Bun.env.OPENROUTER_API_KEY;
+if (Bun.env.FIREWORKS_API_KEY) {
+  providerEnv.FIREWORKS_API_KEY = Bun.env.FIREWORKS_API_KEY;
 }
 
 const model =
   Bun.env.OPENCODE_MODEL ??
-  (providerEnv.OPENROUTER_API_KEY
-    ? "openrouter/qwen/qwen3-coder"
+  (providerEnv.FIREWORKS_API_KEY
+    ? "fireworks-ai/accounts/fireworks/models/deepseek-v4p1-flash"
     : "anthropic/claude-sonnet-4-6");
 const prompt =
   process.argv.slice(2).join(" ") || "Reply with exactly: OpenCode is ready";
 
 if (Object.keys(providerEnv).length === 0) {
   throw new Error(
-    "ANTHROPIC_API_KEY or OPENROUTER_API_KEY must be set in .env",
+    "ANTHROPIC_API_KEY or FIREWORKS_API_KEY must be set in .env",
   );
 }
 
