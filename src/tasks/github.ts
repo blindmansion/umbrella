@@ -7,11 +7,31 @@ export type GitHubReference = {
   urlKind: "issue" | "pull";
 };
 
+export type RepoReference = {
+  owner: string;
+  name: string;
+};
+
 export type GitHubMetadata = {
   title?: string;
   headRef?: string;
   defaultBranch?: string;
 };
+
+export function parseRepoFullName(value: string): RepoReference | undefined {
+  const match = value.trim().match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+  if (!match) return undefined;
+  return { owner: match[1]!, name: match[2]! };
+}
+
+function githubHeaders(githubToken?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "railway-opencode-discord-bot",
+  };
+  if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+  return headers;
+}
 
 export function parseGitHubUrl(value: string): GitHubReference | undefined {
   let url: URL;
@@ -54,11 +74,7 @@ export async function fetchGitHubMetadata(
   reference: GitHubReference,
   githubToken?: string,
 ): Promise<GitHubMetadata> {
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "railway-opencode-discord-bot",
-  };
-  if (githubToken) headers.Authorization = `Bearer ${githubToken}`;
+  const headers = githubHeaders(githubToken);
 
   const base = `https://api.github.com/repos/${encodeURIComponent(reference.owner)}/${encodeURIComponent(reference.name)}`;
   const metadata: GitHubMetadata = {};
@@ -98,6 +114,23 @@ export async function fetchGitHubMetadata(
   }
 
   return metadata;
+}
+
+export async function fetchRepoDefaultBranch(
+  repo: RepoReference,
+  githubToken?: string,
+): Promise<string | undefined> {
+  const url = `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`;
+  try {
+    const response = await fetch(url, { headers: githubHeaders(githubToken) });
+    if (!response.ok) return undefined;
+    const data = (await response.json()) as { default_branch?: unknown };
+    return typeof data.default_branch === "string"
+      ? data.default_branch
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function inferBranch(options: {

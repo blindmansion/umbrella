@@ -24,6 +24,12 @@ export type SessionRecord = {
   createdAt: number;
 };
 
+export type GuildRepoRecord = {
+  guildId: string;
+  repo: string;
+  createdAt: number;
+};
+
 export type TaskUpdate = Partial<
   Pick<
     TaskRecord,
@@ -56,6 +62,9 @@ export type StateStore = {
   ): Promise<SessionRecord | undefined>;
   listSessionsForChannel(channelId: string): Promise<SessionRecord[]>;
   clearSessionsForChannel(channelId: string): Promise<void>;
+  setGuildRepo(guildId: string, repo: string): Promise<GuildRepoRecord>;
+  getGuildRepo(guildId: string): Promise<GuildRepoRecord | undefined>;
+  clearGuildRepo(guildId: string): Promise<void>;
 };
 
 type TaskRow = {
@@ -76,6 +85,12 @@ type SessionRow = {
   channel_id: string;
   opencode_session_id: string | null;
   created_by: string | null;
+  created_at: number;
+};
+
+type GuildRepoRow = {
+  guild_id: string;
+  repo: string;
   created_at: number;
 };
 
@@ -117,6 +132,12 @@ export async function createStore(options: {
       channel_id TEXT NOT NULL REFERENCES tasks(channel_id) ON DELETE CASCADE,
       opencode_session_id TEXT NULL,
       created_by TEXT NULL,
+      created_at BIGINT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS guilds (
+      guild_id TEXT PRIMARY KEY,
+      repo TEXT NOT NULL,
       created_at BIGINT NOT NULL
     );
   `);
@@ -248,6 +269,31 @@ export async function createStore(options: {
         channelId,
       ]);
     },
+
+    async setGuildRepo(guildId, repo) {
+      const { rows } = await database.query<GuildRepoRow>(
+        `INSERT INTO guilds (guild_id, repo, created_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (guild_id)
+         DO UPDATE SET repo = EXCLUDED.repo
+         RETURNING *`,
+        [guildId, repo, Date.now()],
+      );
+      return guildRepoFromRow(rows[0]!);
+    },
+
+    async getGuildRepo(guildId) {
+      const { rows } = await database.query<GuildRepoRow>(
+        "SELECT * FROM guilds WHERE guild_id = $1",
+        [guildId],
+      );
+      const row = rows[0];
+      return row ? guildRepoFromRow(row) : undefined;
+    },
+
+    async clearGuildRepo(guildId) {
+      await database.query("DELETE FROM guilds WHERE guild_id = $1", [guildId]);
+    },
   };
 }
 
@@ -319,6 +365,23 @@ export async function clearSessionsForChannel(
   return (await getDefaultStore()).clearSessionsForChannel(channelId);
 }
 
+export async function setGuildRepo(
+  guildId: string,
+  repo: string,
+): Promise<GuildRepoRecord> {
+  return (await getDefaultStore()).setGuildRepo(guildId, repo);
+}
+
+export async function getGuildRepo(
+  guildId: string,
+): Promise<GuildRepoRecord | undefined> {
+  return (await getDefaultStore()).getGuildRepo(guildId);
+}
+
+export async function clearGuildRepo(guildId: string): Promise<void> {
+  return (await getDefaultStore()).clearGuildRepo(guildId);
+}
+
 function taskFromRow(row: TaskRow): TaskRecord {
   return {
     channelId: row.channel_id,
@@ -340,6 +403,14 @@ function sessionFromRow(row: SessionRow): SessionRecord {
     channelId: row.channel_id,
     openCodeSessionId: row.opencode_session_id,
     createdBy: row.created_by,
+    createdAt: Number(row.created_at),
+  };
+}
+
+function guildRepoFromRow(row: GuildRepoRow): GuildRepoRecord {
+  return {
+    guildId: row.guild_id,
+    repo: row.repo,
     createdAt: Number(row.created_at),
   };
 }

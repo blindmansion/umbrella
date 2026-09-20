@@ -11,7 +11,8 @@ export function createChannelName(
     bugfix: "bug",
     review: "pr",
   };
-  const stem = `${prefixes[kind]}${number === null ? "" : `-${number}`}`;
+  const stem =
+    number === null ? "task" : `${prefixes[kind]}-${number}`;
   const maxSlugLength = Math.max(1, 60 - stem.length - 1);
   return `${stem}-${slug.slice(0, maxSlugLength)}`.slice(0, 100);
 }

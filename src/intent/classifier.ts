@@ -47,7 +47,7 @@ export type IntentQuestions = {
 const ACTION_CRITERIA: Record<IntentAction, string> = {
   chat: "Start or continue work on a coding task: a prompt, question, or instruction for the bot to act on in a session.",
   create_task:
-    "Set up a new task workspace for a GitHub issue or pull request, usually by sharing a GitHub URL, so the bot can start working on it.",
+    "Set up a new task workspace so the bot can start work. This includes sharing a GitHub issue or pull request URL, or asking the bot to take on a coding task, question, or request in the server's configured repository without a URL.",
   reset:
     "Reset, restart, or rebuild the current session or sandbox so the bot starts over.",
   close:

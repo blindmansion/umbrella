@@ -129,6 +129,27 @@ describe("state store", () => {
     expect(await store.getSession(child.threadId)).toBeUndefined();
     await store.close();
   });
+
+  test("stores, replaces, and clears a guild's task repository", async () => {
+    const store = await createTestStore();
+
+    expect(await store.getGuildRepo("guild-1")).toBeUndefined();
+
+    const created = await store.setGuildRepo("guild-1", "owner/one");
+    expect(created.guildId).toBe("guild-1");
+    expect(created.repo).toBe("owner/one");
+    expect(await store.getGuildRepo("guild-1")).toMatchObject({
+      repo: "owner/one",
+    });
+
+    const replaced = await store.setGuildRepo("guild-1", "owner/two");
+    expect(replaced.repo).toBe("owner/two");
+    expect(replaced.createdAt).toBe(created.createdAt);
+
+    await store.clearGuildRepo("guild-1");
+    expect(await store.getGuildRepo("guild-1")).toBeUndefined();
+    await store.close();
+  });
 });
 
 describe("per-channel queue", () => {
