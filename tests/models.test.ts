@@ -22,6 +22,7 @@ function fakeSandbox(outputs: string[]): {
     },
     async writeFile() {},
     async mkdir() {},
+    async checkpoint() {},
     async destroy() {},
   };
   return { sandbox, calls: () => calls };
@@ -36,6 +37,13 @@ function manager() {
       async connect() {
         throw new Error("unused");
       },
+      async restore() {
+        throw new Error("unused");
+      },
+      async listCheckpoints() {
+        return [];
+      },
+      async deleteCheckpoint() {},
     },
     { model: "test/model", sandboxEnv: {}, configHash: "hash" },
   );

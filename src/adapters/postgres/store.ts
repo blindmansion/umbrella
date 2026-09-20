@@ -254,6 +254,13 @@ export async function createStore(options: {
       ]);
     },
 
+    async clearSessionOpenCodeIdsForChannel(channelId) {
+      await database.query(
+        "UPDATE sessions SET opencode_session_id = NULL WHERE channel_id = $1",
+        [channelId],
+      );
+    },
+
     async setGuildRepo(guildId, repo) {
       const { rows } = await database.query<GuildRepoRow>(
         `INSERT INTO guilds (guild_id, repo, created_at)

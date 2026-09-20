@@ -38,6 +38,7 @@ function fakeSandbox(result = { exitCode: 0, stdout: "", stderr: "", timedOut: f
     },
     async writeFile() {},
     async mkdir() {},
+    async checkpoint() {},
     async destroy() {},
   };
   return { sandbox, calls };

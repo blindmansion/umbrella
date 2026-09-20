@@ -139,6 +139,20 @@ sandbox, reset the task channel to rebuild the sandbox and invalidate all thread
 sessions, or close the task to destroy its sandbox and archive active threads
 while preserving channel history.
 
+### Resumable sandboxes
+
+Railway sandboxes are torn down after an idle timeout, which used to lose the
+repository checkout and every OpenCode session in it. After each completed
+prompt the bot captures a checkpoint of the sandbox disk named for the task
+channel, so when a sandbox is gone it can be booted back from that checkpoint
+with the working tree, branch, and OpenCode sessions intact. Threads then resume
+their stored sessions without losing context.
+
+If no checkpoint is available — for example after a configuration change forces
+a rebuild, or the restore itself fails — the bot starts a fresh session seeded
+with the task's context and the thread's Discord history, so the conversation
+can still continue. Resetting or closing a task deletes its checkpoint.
+
 Requests that don't have a GitHub issue or pull request run against the
 server's configured repository. An admin sets it once with
 `/repo set blindmansion/umbrella` (and can inspect it with `/repo show` or

@@ -45,9 +45,22 @@ function handle(
     },
     async mkdir() {},
     async writeFile() {},
+    async checkpoint() {},
     async destroy() {
       this.destroyed = true;
     },
+  };
+}
+
+function unavailableCheckpoints() {
+  return {
+    async restore(): Promise<never> {
+      throw new Error("no checkpoint");
+    },
+    async listCheckpoints() {
+      return [];
+    },
+    async deleteCheckpoint() {},
   };
 }
 
@@ -61,6 +74,7 @@ describe("SandboxManager", () => {
       async create() {
         return created;
       },
+      ...unavailableCheckpoints(),
     };
     const manager = new SandboxManager(provider, {
       model: "test/model",
@@ -72,7 +86,11 @@ describe("SandboxManager", () => {
       task: task({ sandboxId: "old-sandbox", configHash: "hash" }),
     });
 
-    expect(result).toEqual({ sandbox: created, rebuilt: true });
+    expect(result).toEqual({
+      sandbox: created,
+      rebuilt: true,
+      restored: false,
+    });
     expect(created.commands.some((command) => command.startsWith("git clone"))).toBe(true);
   });
 
@@ -87,6 +105,7 @@ describe("SandboxManager", () => {
       async create() {
         return replacement;
       },
+      ...unavailableCheckpoints(),
     };
     const manager = new SandboxManager(provider, {
       model: "test/model",
@@ -118,6 +137,7 @@ describe("SandboxManager", () => {
       },
       async mkdir() {},
       async writeFile() {},
+      async checkpoint() {},
       async destroy() {},
     };
     const manager = new SandboxManager(
@@ -128,6 +148,7 @@ describe("SandboxManager", () => {
         async create() {
           return sandbox;
         },
+        ...unavailableCheckpoints(),
       },
       { model: "test/model", sandboxEnv: {}, configHash: "hash" },
     );
@@ -163,6 +184,7 @@ describe("SandboxManager", () => {
       },
       async mkdir() {},
       async writeFile() {},
+      async checkpoint() {},
       async destroy() {},
     };
     const manager = new SandboxManager(
@@ -173,6 +195,7 @@ describe("SandboxManager", () => {
         async create() {
           return sandbox;
         },
+        ...unavailableCheckpoints(),
       },
       { model: "test/model", sandboxEnv: {}, configHash: "hash" },
     );
@@ -201,6 +224,7 @@ describe("SandboxManager", () => {
       async create() {
         return broken;
       },
+      ...unavailableCheckpoints(),
     };
     const manager = new SandboxManager(provider, {
       model: "test/model",

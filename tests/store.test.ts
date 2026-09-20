@@ -182,6 +182,33 @@ describe("state store", () => {
     await store.close();
   });
 
+  test("clears OpenCode session ids without touching session rows", async () => {
+    const store = await createTestStore();
+    const parent = task("channel-1");
+    const first = session("thread-1", parent.channelId, {
+      openCodeSessionId: "opencode-session-1",
+    });
+    const second = session("thread-2", parent.channelId, {
+      openCodeSessionId: "opencode-session-2",
+    });
+
+    await store.createTask(parent);
+    await store.createSession(first);
+    await store.createSession(second);
+
+    await store.clearSessionOpenCodeIdsForChannel(parent.channelId);
+
+    const sessions = await store.listSessionsForChannel(parent.channelId);
+    expect(sessions.map((entry) => entry.threadId)).toEqual([
+      "thread-1",
+      "thread-2",
+    ]);
+    expect(sessions.every((entry) => entry.openCodeSessionId === null)).toBe(
+      true,
+    );
+    await store.close();
+  });
+
   test("stores, replaces, and clears a guild's task repository", async () => {
     const store = await createTestStore();
 

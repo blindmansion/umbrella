@@ -17,6 +17,21 @@ import {
 
 type ModelCacheEntry = { models: string[]; fetchedAt: number };
 
+const SANDBOX_IDLE_TIMEOUT_MINUTES = 60;
+
+export type SandboxResolution = {
+  sandbox: SandboxHandle;
+  /** A brand-new sandbox was bootstrapped because none could be reused. */
+  rebuilt: boolean;
+  /** The sandbox was booted from a checkpoint, so its OpenCode sessions remain valid. */
+  restored: boolean;
+};
+
+/** Environment-scoped checkpoint name. Task channels are unique, so one each. */
+export function checkpointNameForChannel(channelId: string): string {
+  return `umbrella-${channelId}`;
+}
+
 export class SandboxManager {
   private readonly live = new Map<string, SandboxHandle>();
   private readonly modelCache = new Map<string, ModelCacheEntry>();
@@ -31,13 +46,13 @@ export class SandboxManager {
     task: TaskRecord;
     guildName?: string;
     onRebuild?: () => void | Promise<void>;
-  }): Promise<{ sandbox: SandboxHandle; rebuilt: boolean }> {
+  }): Promise<SandboxResolution> {
     const { task, guildName, onRebuild } = options;
     const cached = this.live.get(task.channelId);
     const matches = task.configHash === this.config.configHash;
 
     if (cached && matches && task.sandboxId === cached.id) {
-      return { sandbox: cached, rebuilt: false };
+      return { sandbox: cached, rebuilt: false, restored: false };
     }
 
     if (!matches) {
@@ -49,25 +64,32 @@ export class SandboxManager {
           .catch(() => undefined);
         await this.destroyHandle(stale, "stale");
       }
-    } else if (cached) {
-      this.live.delete(task.channelId);
-      await this.destroyHandle(cached, "replaced");
-      const connected = task.sandboxId
-        ? await this.connect(task.channelId, task.sandboxId)
-        : undefined;
-      if (connected) return { sandbox: connected, rebuilt: false };
-    } else if (task.sandboxId) {
-      const connected = await this.connect(task.channelId, task.sandboxId);
-      if (connected) return { sandbox: connected, rebuilt: false };
+      await this.deleteCheckpoint(task.channelId);
+    } else {
+      if (cached) {
+        this.live.delete(task.channelId);
+        await this.destroyHandle(cached, "replaced");
+      }
+      if (task.sandboxId) {
+        const connected = await this.connect(task.channelId, task.sandboxId);
+        if (connected) return { sandbox: connected, rebuilt: false, restored: false };
+      }
+      const restored = await this.restoreFromCheckpoint(task.channelId);
+      if (restored) {
+        this.live.set(task.channelId, restored);
+        this.clearModelCache(task.channelId);
+        return { sandbox: restored, rebuilt: false, restored: true };
+      }
     }
 
     const sandbox = await this.provider.create({
-      idleTimeoutMinutes: 60,
+      idleTimeoutMinutes: SANDBOX_IDLE_TIMEOUT_MINUTES,
       env: this.config.sandboxEnv,
       networkIsolation: this.config.networkIsolation,
     });
     try {
       await this.bootstrap(sandbox, task, guildName);
+      await this.captureCheckpoint(sandbox, task.channelId);
     } catch (error) {
       await sandbox.destroy().catch(() => undefined);
       throw error;
@@ -76,7 +98,7 @@ export class SandboxManager {
     this.live.set(task.channelId, sandbox);
     this.clearModelCache(task.channelId);
     await onRebuild?.();
-    return { sandbox, rebuilt: true };
+    return { sandbox, rebuilt: true, restored: false };
   }
 
   async getExisting(
@@ -114,11 +136,35 @@ export class SandboxManager {
     this.clearModelCache(channelId);
     if (cached) {
       await this.destroyHandle(cached, "");
-      return;
-    }
-    if (sandboxId) {
-      const sandbox = await this.provider.connect(sandboxId).catch(() => undefined);
+    } else if (sandboxId) {
+      const sandbox = await this.provider
+        .connect(sandboxId)
+        .catch(() => undefined);
       await this.destroyHandle(sandbox, "");
+    }
+    await this.deleteCheckpoint(channelId);
+  }
+
+  /**
+   * Snapshot the sandbox disk so a future teardown can be recovered with its
+   * repository state and OpenCode sessions intact. Best-effort.
+   */
+  async captureCheckpoint(
+    sandbox: SandboxHandle,
+    channelId: string,
+  ): Promise<void> {
+    const name = checkpointNameForChannel(channelId);
+    const startedAt = Date.now();
+    try {
+      await sandbox.checkpoint(name);
+      console.log(
+        `Captured checkpoint ${name} for channel ${channelId} in ${Date.now() - startedAt}ms`,
+      );
+    } catch (error) {
+      console.warn(
+        `Could not capture checkpoint ${name} for channel ${channelId}:`,
+        sanitizeError(error),
+      );
     }
   }
 
@@ -161,6 +207,45 @@ export class SandboxManager {
   clearModelCache(channelId?: string): void {
     if (channelId === undefined) this.modelCache.clear();
     else this.modelCache.delete(channelId);
+  }
+
+  private async restoreFromCheckpoint(
+    channelId: string,
+  ): Promise<SandboxHandle | undefined> {
+    const name = checkpointNameForChannel(channelId);
+    try {
+      const sandbox = await this.provider.restore(name, {
+        idleTimeoutMinutes: SANDBOX_IDLE_TIMEOUT_MINUTES,
+        env: this.config.sandboxEnv,
+        networkIsolation: this.config.networkIsolation,
+      });
+      console.log(
+        `Restored sandbox ${sandbox.id} for channel ${channelId} from checkpoint ${name}`,
+      );
+      return sandbox;
+    } catch (error) {
+      console.warn(
+        `Could not restore sandbox for channel ${channelId} from checkpoint ${name}:`,
+        sanitizeError(error, [this.config.githubToken ?? ""]),
+      );
+      return undefined;
+    }
+  }
+
+  private async deleteCheckpoint(channelId: string): Promise<void> {
+    const name = checkpointNameForChannel(channelId);
+    try {
+      const checkpoints = await this.provider.listCheckpoints();
+      const match = checkpoints.find((checkpoint) => checkpoint.key === name);
+      if (!match) return;
+      await this.provider.deleteCheckpoint(match.id);
+      console.log(`Deleted checkpoint ${name} for channel ${channelId}`);
+    } catch (error) {
+      console.warn(
+        `Could not delete checkpoint ${name} for channel ${channelId}:`,
+        sanitizeError(error),
+      );
+    }
   }
 
   private async connect(

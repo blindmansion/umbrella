@@ -45,6 +45,7 @@ export function createUmbrella(deps: Deps) {
       prompt: options.prompt,
       createdBy: options.createdBy,
       includeContext: options.includeContext,
+      triggerMessageId: options.msg.id,
     });
 
   async function onMessage(msg: IncomingMessage): Promise<void> {

@@ -58,6 +58,8 @@ class LocalSandbox implements SandboxHandle {
     await mkdir(this.translate(path), { recursive: true });
   }
 
+  async checkpoint(): Promise<void> {}
+
   destroy(): Promise<void> {
     this.onDestroy();
     return rm(this.root, { recursive: true, force: true });
@@ -97,5 +99,12 @@ export function createLocalSandboxProvider(): SandboxProvider {
       if (!sandbox) throw new Error(`Local sandbox ${id} no longer exists`);
       return sandbox;
     },
+    async restore() {
+      throw new Error("Local sandboxes do not support checkpoints");
+    },
+    async listCheckpoints() {
+      return [];
+    },
+    async deleteCheckpoint() {},
   };
 }
