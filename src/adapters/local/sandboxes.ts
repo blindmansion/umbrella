@@ -66,6 +66,7 @@ class LocalSandbox implements SandboxHandle {
   private translate(value: string): string {
     const paths = value
       .replaceAll("/root/workspace", join(this.root, "workspace"))
+      .replaceAll("/root/worktrees", join(this.root, "worktrees"))
       .replaceAll("/tmp/", `${join(this.root, "tmp")}/`);
     const opencode =
       "$(command -v opencode || printf 'bunx --yes opencode-ai')";

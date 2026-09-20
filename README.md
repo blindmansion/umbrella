@@ -2,8 +2,8 @@
 
 Umbrella is a Discord bot that turns GitHub issues and pull requests into task
 channels backed by short-lived Railway sandboxes. Each Discord thread keeps an
-OpenCode session, while all threads in a task channel share one repository
-checkout and branch.
+OpenCode session in its own git worktree and branch, so threads in a task
+channel share one repository clone without sharing a working directory.
 
 Umbrella is developed on Railway. The repository defines the complete
 production stack as code:
@@ -156,16 +156,19 @@ session. The `model` option autocompletes from the models OpenCode reports in
 the task's running sandbox, so it only offers providers whose credentials are
 configured. Running `/model` with no option shows the current effective model.
 
-These ad-hoc sessions clone the default branch and let the agent decide what to
-do next. The bot doesn't pre-create a branch or open a pull request; the agent
-branches, commits, pushes, and opens a pull request as needed.
+Each new session gets its own worktree under `/root/worktrees/<thread>` on a
+branch derived from the task branch, and the agent runs there with that
+directory as its working directory. Threads therefore don't collide on
+uncommitted changes or check out the same branch twice. The agent branches,
+commits, pushes, and opens a pull request as needed.
 
 Each new session starts with the task's context prepended to its first prompt:
-the GitHub issue or pull request title and description, its URL, and the task
-branch (or, for repository tasks, the repository and the request that started
-the task). Threads in a task channel therefore don't need to restate which issue
-they're working on. Reset a thread to start a fresh session, which reintroduces
-the same context.
+the GitHub issue or pull request title and description, its URL, the task
+branch, and the session's worktree directory and branch (or, for repository
+tasks, the repository and the request that started the task). Threads in a task
+channel therefore don't need to restate which issue they're working on. Reset a
+thread to start a fresh session in the same worktree, which reintroduces the
+same context.
 
 The `/task` and `/close` commands and `@umbrella` mentions still work as
 explicit overrides; they are no longer required. See

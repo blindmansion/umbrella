@@ -165,6 +165,8 @@ export function createUmbrella(deps: Deps) {
                 channelId: result.channelId,
                 openCodeSessionId: null,
                 model: null,
+                worktreePath: null,
+                branch: null,
                 createdBy: msg.authorId,
                 createdAt: (deps.clock ?? Date.now)(),
               });
@@ -256,6 +258,8 @@ export function createUmbrella(deps: Deps) {
       channelId: msg.channelId,
       openCodeSessionId: null,
       model: null,
+      worktreePath: null,
+      branch: null,
       createdBy: msg.authorId,
       createdAt: (deps.clock ?? Date.now)(),
     });
