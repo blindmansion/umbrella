@@ -7,7 +7,7 @@ import {
   type AnyThreadChannel,
   type Message,
 } from "discord.js";
-import { runOpenCode, type ProgressEvent } from "./opencode";
+import { runOpenCode } from "./opencode";
 import {
   computeConfigHash,
   destroySandbox,
@@ -331,10 +331,6 @@ async function runThreadPrompt(options: {
             );
           }
 
-          if (event.type === "tool_use") {
-            await thread.send(formatToolEvent(event));
-          }
-
           if (event.type === "error") {
             await thread.send("✗ OpenCode reported an error.");
           }
@@ -370,51 +366,6 @@ function createThreadName(prompt: string): string {
     .replace(/\s+/g, " ")
     .trim();
   return cleaned.slice(0, 80) || "OpenCode task";
-}
-
-function formatToolEvent(
-  event: Extract<ProgressEvent, { type: "tool_use" }>,
-): string {
-  const succeeded = event.status === "completed";
-  const detail = sanitizeToolDetail(
-    event.title ?? summarizeToolInput(event.input),
-  );
-  return `${succeeded ? "✓" : "✗"} **${event.tool.replaceAll("*", "")}**${detail ? ` — \`${detail}\`` : ""}`;
-}
-
-function summarizeToolInput(input?: Record<string, unknown>): string {
-  if (!input) return "";
-
-  for (const key of [
-    "command",
-    "filePath",
-    "path",
-    "pattern",
-    "query",
-    "description",
-    "url",
-  ]) {
-    if (typeof input[key] === "string") return input[key];
-  }
-
-  return "";
-}
-
-function sanitizeToolDetail(value: string): string {
-  let sanitized = value.replace(/\s+/g, " ").replaceAll("`", "'");
-
-  const secrets = [token, githubToken, ...Object.values(providerEnv)].filter(
-    (secret): secret is string => Boolean(secret),
-  );
-  for (const secret of secrets) {
-    sanitized = sanitized.replaceAll(secret, "[redacted]");
-  }
-
-  sanitized = sanitized.replace(
-    /(token|api[_-]?key|secret|password)(\s*[:=]\s*)\S+/gi,
-    "$1$2[redacted]",
-  );
-  return sanitized.slice(0, 300);
 }
 
 function truncateForDiscord(value: string): string {
